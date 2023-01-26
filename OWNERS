@@ -13,5 +13,4 @@ reviewers:
 - elmiko
 - lobziik
 - odvarkadaniel
-component: Cloud Compute
-subcomponent: Cloud Controller Manager
+component: "Cloud Compute / Cloud Controller Manager"

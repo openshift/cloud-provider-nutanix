@@ -14,7 +14,7 @@ jobs:
       contents: read
       security-events: write
     name: Scan
-    runs-on: "ubuntu-18.04"
+    runs-on: "ubuntu-latest"
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -23,7 +23,7 @@ jobs:
         run: echo "REPOSITORY_NAME=${GITHUB_REPOSITORY#*/}" >> $GITHUB_ENV
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
           go-version: "^1.17"
 
@@ -43,7 +43,7 @@ jobs:
           ko build -B -t ${{ github.sha }} --platform=$PLATFORMS .
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.7.1
+        uses: aquasecurity/trivy-action@0.10.0
         with:
           image-ref: "ko.local/${{ env.REPOSITORY_NAME }}:${{ github.sha }}"
           format: "sarif"

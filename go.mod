@@ -1,6 +1,6 @@
 module github.com/nutanix-cloud-native/cloud-provider-nutanix
 
-go 1.21
+go 1.22
 
 require (
 	github.com/google/uuid v1.5.0

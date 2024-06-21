@@ -20,6 +20,7 @@ cloud-provider-nutanix
 go.work
 
 .DS_Store
+.idea
 
 **/cover.out
 bin/

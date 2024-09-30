@@ -4,21 +4,24 @@ on:
     branches:
       - main
       - 'release-*'
-  pull_request:
+  pull_request_target:
 jobs:
   build-container:
     runs-on: ubuntu-latest
     env:
       EXPORT_RESULT: true
     steps:
-      - run: echo "🎉 The job was automatically triggered by a ${{ github.event_name }} event."
-
-      - run: echo "🔎 The name of your branch is ${{ github.ref }} and your repository is ${{ github.repository }}."
-
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
 
-      - uses: actions/cache@v3
+      - name: Install devbox
+        uses: jetify-com/devbox-install-action@v0.11.0
+        with:
+          enable-cache: "true"
+
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cache/golangci-lint
@@ -27,12 +30,6 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
-
-      - name: Install devbox
-        run: curl -fsSL https://get.jetpack.io/devbox | bash -s -- -f
-
-      - name: Install devbox deps
-        run: devbox install
 
       - name: Test build
         run: devbox run -- make build
@@ -49,7 +46,7 @@ jobs:
         run: devbox run -- make coverage
 
       - name: Codecov
-        uses: codecov/codecov-action@v3.1.4
+        uses: codecov/codecov-action@v4.5.0
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
@@ -57,7 +54,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.16.1
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           scan-type: "fs"
           ignore-unfixed: true
@@ -65,3 +62,16 @@ jobs:
           exit-code: "1"
           vuln-type: "os,library"
           severity: "CRITICAL,HIGH"
+  e2e:
+    strategy:
+      matrix:
+        e2e-labels:
+          - "capx"
+      fail-fast: false
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      e2e-labels: ${{ matrix.e2e-labels }}
+    secrets: inherit
+    permissions:
+      contents: read
+      checks: write

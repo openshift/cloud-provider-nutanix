@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	prismClientV3 "github.com/nutanix-cloud-native/prism-go-client/v3"
+	prismclientv3 "github.com/nutanix-cloud-native/prism-go-client/v3"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
@@ -35,18 +35,28 @@ import (
 )
 
 type nutanixManager struct {
-	client        clientset.Interface
-	config        config.Config
-	nutanixClient interfaces.Client
+	client         clientset.Interface
+	config         config.Config
+	nutanixClient  interfaces.Client
+	ignoredNodeIPs map[string]struct{}
 }
 
 func newNutanixManager(config config.Config) (*nutanixManager, error) {
 	klog.V(1).Info("Creating new newNutanixManager")
+
+	// Initialize the ignoredNodeIPs map
+	ignoredNodeIPs := make(map[string]struct{}, len(config.IgnoredNodeIPs))
+	for _, ip := range config.IgnoredNodeIPs {
+		ignoredNodeIPs[ip] = struct{}{}
+	}
+
 	m := &nutanixManager{
 		config: config,
 		nutanixClient: &nutanixClient{
-			config: config,
+			config:      config,
+			clientCache: prismclientv3.NewClientCache(prismclientv3.WithSessionAuth(true)),
 		},
+		ignoredNodeIPs: ignoredNodeIPs,
 	}
 	return m, nil
 }
@@ -218,7 +228,7 @@ func (n *nutanixManager) isNodeShutdown(ctx context.Context, node *v1.Node) (boo
 	return false, nil
 }
 
-func (n *nutanixManager) isVMShutdown(vm *prismClientV3.VMIntentResponse) bool {
+func (n *nutanixManager) isVMShutdown(vm *prismclientv3.VMIntentResponse) bool {
 	return *vm.Spec.Resources.PowerState == constants.PoweredOffState
 }
 
@@ -261,26 +271,29 @@ func (n *nutanixManager) generateProviderID(ctx context.Context, vmUUID string) 
 	return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(vmUUID)), nil
 }
 
-func (n *nutanixManager) getNodeAddresses(ctx context.Context, vm *prismClientV3.VMIntentResponse) ([]v1.NodeAddress, error) {
+func (n *nutanixManager) getNodeAddresses(_ context.Context, vm *prismclientv3.VMIntentResponse) ([]v1.NodeAddress, error) {
 	if vm == nil {
 		return nil, fmt.Errorf("vm cannot be nil when getting node addresses")
 	}
-	addresses := make([]v1.NodeAddress, 0)
-	foundIPs := 0
+
+	var addresses []v1.NodeAddress
 	for _, nic := range vm.Status.Resources.NicList {
 		for _, ipEndpoint := range nic.IPEndpointList {
 			if ipEndpoint.IP != nil {
-				addresses = append(addresses, v1.NodeAddress{
-					Type:    v1.NodeInternalIP,
-					Address: *ipEndpoint.IP,
-				})
-				foundIPs++
+				// Ignore the IP address if it is one of the specified ignoredNodeIPs.
+				if _, ok := n.ignoredNodeIPs[*ipEndpoint.IP]; !ok {
+					addresses = append(addresses, v1.NodeAddress{
+						Type:    v1.NodeInternalIP,
+						Address: *ipEndpoint.IP,
+					})
+				}
 			}
 		}
 	}
-	if foundIPs == 0 {
+	if len(addresses) == 0 {
 		return addresses, fmt.Errorf("unable to determine network interfaces from VM with UUID %s", *vm.Metadata.UUID)
 	}
+
 	addresses = append(addresses, v1.NodeAddress{
 		Type:    v1.NodeHostName,
 		Address: *vm.Spec.Name,
@@ -292,7 +305,7 @@ func (n *nutanixManager) stripNutanixIDFromProviderID(providerID string) string 
 	return strings.TrimPrefix(providerID, fmt.Sprintf("%s://", constants.ProviderName))
 }
 
-func (n *nutanixManager) getTopologyInfo(ctx context.Context, nutanixClient interfaces.Prism, vm *prismClientV3.VMIntentResponse) (config.TopologyInfo, error) {
+func (n *nutanixManager) getTopologyInfo(ctx context.Context, nutanixClient interfaces.Prism, vm *prismclientv3.VMIntentResponse) (config.TopologyInfo, error) {
 	topologyDiscovery := n.config.TopologyDiscovery
 
 	switch topologyDiscovery.Type {
@@ -304,7 +317,7 @@ func (n *nutanixManager) getTopologyInfo(ctx context.Context, nutanixClient inte
 	return config.TopologyInfo{}, fmt.Errorf("unsupported topology discovery type: %s", topologyDiscovery.Type)
 }
 
-func (n *nutanixManager) getTopologyInfoUsingPrism(ctx context.Context, nClient interfaces.Prism, vm *prismClientV3.VMIntentResponse) (config.TopologyInfo, error) {
+func (n *nutanixManager) getTopologyInfoUsingPrism(ctx context.Context, nClient interfaces.Prism, vm *prismclientv3.VMIntentResponse) (config.TopologyInfo, error) {
 	ti := config.TopologyInfo{}
 	if nClient == nil {
 		return ti, fmt.Errorf("nutanix client cannot be nil when searching for Prism topology info")
@@ -326,7 +339,7 @@ func (n *nutanixManager) getTopologyInfoUsingPrism(ctx context.Context, nClient 
 	return ti, nil
 }
 
-func (n *nutanixManager) getTopologyInfoUsingCategories(ctx context.Context, nutanixClient interfaces.Prism, vm *prismClientV3.VMIntentResponse) (config.TopologyInfo, error) {
+func (n *nutanixManager) getTopologyInfoUsingCategories(ctx context.Context, nutanixClient interfaces.Prism, vm *prismclientv3.VMIntentResponse) (config.TopologyInfo, error) {
 	tc := &config.TopologyInfo{}
 	if vm == nil {
 		return *tc, fmt.Errorf("vm cannot be nil while getting topology info")
@@ -369,7 +382,7 @@ func (n *nutanixManager) getZoneInfoFromCategories(categories map[string]string,
 	return nil
 }
 
-func (n *nutanixManager) getTopologyInfoFromCluster(ctx context.Context, nClient interfaces.Prism, vm *prismClientV3.VMIntentResponse, ti *config.TopologyInfo) error {
+func (n *nutanixManager) getTopologyInfoFromCluster(ctx context.Context, nClient interfaces.Prism, vm *prismclientv3.VMIntentResponse, ti *config.TopologyInfo) error {
 	if nClient == nil {
 		return fmt.Errorf("nutanix client cannot be nil when searching for topology info")
 	}
@@ -390,7 +403,7 @@ func (n *nutanixManager) getTopologyInfoFromCluster(ctx context.Context, nClient
 	return nil
 }
 
-func (n *nutanixManager) getTopologyInfoFromVM(vm *prismClientV3.VMIntentResponse, ti *config.TopologyInfo) error {
+func (n *nutanixManager) getTopologyInfoFromVM(vm *prismclientv3.VMIntentResponse, ti *config.TopologyInfo) error {
 	if vm == nil {
 		return fmt.Errorf("vm cannot be nil when searching for topology info")
 	}
@@ -413,7 +426,7 @@ func (n *nutanixManager) hasEmptyTopologyInfo(ti config.TopologyInfo) bool {
 	return false
 }
 
-func (n *nutanixManager) getPrismCentralCluster(ctx context.Context, nClient interfaces.Prism) (*prismClientV3.ClusterIntentResponse, error) {
+func (n *nutanixManager) getPrismCentralCluster(ctx context.Context, nClient interfaces.Prism) (*prismclientv3.ClusterIntentResponse, error) {
 	const filter = ""
 	if nClient == nil {
 		return nil, fmt.Errorf("nutanix client cannot be nil when getting prism central cluster")
@@ -423,7 +436,7 @@ func (n *nutanixManager) getPrismCentralCluster(ctx context.Context, nClient int
 		return nil, err
 	}
 
-	foundPCs := make([]*prismClientV3.ClusterIntentResponse, 0)
+	foundPCs := make([]*prismclientv3.ClusterIntentResponse, 0)
 	for _, s := range responsePEs.Entities {
 		if n.hasPEClusterServiceEnabled(s, constants.PrismCentralService) {
 			foundPCs = append(foundPCs, s)
@@ -439,7 +452,7 @@ func (n *nutanixManager) getPrismCentralCluster(ctx context.Context, nClient int
 	return nil, fmt.Errorf("more than one Prism Central cluster ")
 }
 
-func (n *nutanixManager) hasPEClusterServiceEnabled(peCluster *prismClientV3.ClusterIntentResponse, serviceName string) bool {
+func (n *nutanixManager) hasPEClusterServiceEnabled(peCluster *prismclientv3.ClusterIntentResponse, serviceName string) bool {
 	if peCluster.Status == nil ||
 		peCluster.Status.Resources == nil ||
 		peCluster.Status.Resources.Config == nil {

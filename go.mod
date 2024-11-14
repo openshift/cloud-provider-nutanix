@@ -170,5 +170,6 @@ require (
 replace (
 	github.com/cloudflare/circl => github.com/cloudflare/circl v1.3.7 // CVE: https://github.com/advisories/GHSA-9763-4f94-gfch
 	github.com/google/cel-go => github.com/google/cel-go v0.17.7
+	google.golang.org/protobuf => google.golang.org/protobuf v1.33.0
 	sigs.k8s.io/kind => sigs.k8s.io/kind v0.17.0
 )

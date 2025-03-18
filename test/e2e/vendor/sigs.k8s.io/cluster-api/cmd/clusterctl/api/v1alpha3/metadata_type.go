@@ -35,13 +35,13 @@ type Metadata struct {
 
 // ReleaseSeries maps a provider release series (major/minor) with a API Version of Cluster API (contract).
 type ReleaseSeries struct {
-	// Major version of the release series
-	Major uint `json:"major,omitempty"`
+	// major version of the release series
+	Major int32 `json:"major,omitempty"`
 
-	// Minor version of the release series
-	Minor uint `json:"minor,omitempty"`
+	// minor version of the release series
+	Minor int32 `json:"minor,omitempty"`
 
-	// Contract defines the Cluster API contract supported by this series.
+	// contract defines the Cluster API contract supported by this series.
 	//
 	// The value is an API Version, e.g. `v1alpha3`.
 	Contract string `json:"contract,omitempty"`
@@ -60,7 +60,7 @@ func init() {
 // GetReleaseSeriesForVersion returns the release series for a given version.
 func (m *Metadata) GetReleaseSeriesForVersion(version *version.Version) *ReleaseSeries {
 	for _, releaseSeries := range m.ReleaseSeries {
-		if version.Major() == releaseSeries.Major && version.Minor() == releaseSeries.Minor {
+		if version.Major() == uint(releaseSeries.Major) && version.Minor() == uint(releaseSeries.Minor) {
 			return &releaseSeries
 		}
 	}

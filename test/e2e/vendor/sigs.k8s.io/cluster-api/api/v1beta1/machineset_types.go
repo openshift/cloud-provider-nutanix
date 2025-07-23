@@ -40,7 +40,9 @@ const (
 // MachineSetSpec defines the desired state of MachineSet.
 type MachineSetSpec struct {
 	// clusterName is the name of the Cluster this object belongs to.
+	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	ClusterName string `json:"clusterName"`
 
 	// replicas is the number of desired replicas.
@@ -78,6 +80,7 @@ type MachineSetSpec struct {
 	// Label keys and values that must match in order to be controlled by this MachineSet.
 	// It must match the machine template's labels.
 	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+	// +required
 	Selector metav1.LabelSelector `json:"selector"`
 
 	// template is the object that describes the machine that will be created if
@@ -236,7 +239,7 @@ const (
 
 // MachineTemplateSpec describes the data needed to create a Machine from a template.
 type MachineTemplateSpec struct {
-	// Standard object's metadata.
+	// metadata is the standard object's metadata.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
 	ObjectMeta `json:"metadata,omitempty"`
@@ -284,6 +287,8 @@ type MachineSetStatus struct {
 	// by clients. The string will be in the same format as the query-param syntax.
 	// More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
 	Selector string `json:"selector,omitempty"`
 
 	// replicas is the most recently observed number of replicas.
@@ -344,6 +349,8 @@ type MachineSetStatus struct {
 	// Deprecated: This field is deprecated and is going to be removed in the next apiVersion. Please see https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md for more details.
 	//
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=10240
 	FailureMessage *string `json:"failureMessage,omitempty"`
 
 	// conditions defines current service state of the MachineSet.
@@ -419,10 +426,17 @@ func (m *MachineSet) Validate() field.ErrorList {
 
 // MachineSet is the Schema for the machinesets API.
 type MachineSet struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard object's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MachineSetSpec   `json:"spec,omitempty"`
+	// spec is the desired state of MachineSet.
+	// +optional
+	Spec MachineSetSpec `json:"spec,omitempty"`
+	// status is the observed state of MachineSet.
+	// +optional
 	Status MachineSetStatus `json:"status,omitempty"`
 }
 
@@ -457,8 +471,12 @@ func (m *MachineSet) SetV1Beta2Conditions(conditions []metav1.Condition) {
 // MachineSetList contains a list of MachineSet.
 type MachineSetList struct {
 	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard list's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#lists-and-simple-kinds
+	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []MachineSet `json:"items"`
+	// items is the list of MachineSets.
+	Items []MachineSet `json:"items"`
 }
 
 func init() {

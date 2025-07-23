@@ -20,6 +20,8 @@ package desiredstate
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -193,11 +195,16 @@ func computeInfrastructureCluster(_ context.Context, s *scope.Scope) (*unstructu
 	cluster := s.Current.Cluster
 	currentRef := cluster.Spec.InfrastructureRef
 
+	nameTemplate := "{{ .cluster.name }}-{{ .random }}"
+	if s.Blueprint.ClusterClass.Spec.InfrastructureNamingStrategy != nil && s.Blueprint.ClusterClass.Spec.InfrastructureNamingStrategy.Template != nil {
+		nameTemplate = *s.Blueprint.ClusterClass.Spec.InfrastructureNamingStrategy.Template
+	}
+
 	infrastructureCluster, err := templateToObject(templateToInput{
 		template:              template,
 		templateClonedFromRef: templateClonedFromRef,
 		cluster:               cluster,
-		nameGenerator:         topologynames.SimpleNameGenerator(fmt.Sprintf("%s-", cluster.Name)),
+		nameGenerator:         topologynames.InfraClusterNameGenerator(nameTemplate, cluster.Name),
 		currentObjectRef:      currentRef,
 		// Note: It is not possible to add an ownerRef to Cluster at this stage, otherwise the provisioning
 		// of the infrastructure cluster starts no matter of the object being actually referenced by the Cluster itself.
@@ -503,19 +510,6 @@ func (g *generator) computeControlPlaneVersion(ctx context.Context, s *scope.Sco
 		return *currentVersion, nil
 	}
 
-	// If the control plane supports replicas, check if the control plane is in the middle of a scale operation.
-	// If yes, then do not pick up the desiredVersion yet. We will pick up the new version after the control plane is stable.
-	if s.Blueprint.Topology.ControlPlane.Replicas != nil {
-		cpScaling, err := contract.ControlPlane().IsScaling(s.Current.ControlPlane.Object)
-		if err != nil {
-			return "", errors.Wrap(err, "failed to check if the control plane is scaling")
-		}
-		if cpScaling {
-			s.UpgradeTracker.ControlPlane.IsScaling = true
-			return *currentVersion, nil
-		}
-	}
-
 	// If the control plane is not upgrading or scaling, we can assume the control plane is stable.
 	// However, we should also check for the MachineDeployments/MachinePools upgrading.
 	// If the MachineDeployments/MachinePools are upgrading, then do not pick up the desiredVersion yet.
@@ -526,6 +520,35 @@ func (g *generator) computeControlPlaneVersion(ctx context.Context, s *scope.Sco
 	}
 
 	if feature.Gates.Enabled(feature.RuntimeSDK) {
+		var hookAnnotations []string
+		for key := range s.Current.Cluster.Annotations {
+			if strings.HasPrefix(key, clusterv1.BeforeClusterUpgradeHookAnnotationPrefix) {
+				hookAnnotations = append(hookAnnotations, key)
+			}
+		}
+		if len(hookAnnotations) > 0 {
+			slices.Sort(hookAnnotations)
+			message := fmt.Sprintf("annotations [%s] are set", strings.Join(hookAnnotations, ", "))
+			if len(hookAnnotations) == 1 {
+				message = fmt.Sprintf("annotation [%s] is set", strings.Join(hookAnnotations, ", "))
+			}
+			// Add the hook with a response to the tracker so we can later update the condition.
+			s.HookResponseTracker.Add(runtimehooksv1.BeforeClusterUpgrade, &runtimehooksv1.BeforeClusterUpgradeResponse{
+				CommonRetryResponse: runtimehooksv1.CommonRetryResponse{
+					// RetryAfterSeconds needs to be set because having only hooks without RetryAfterSeconds
+					// would lead to not updating the condition. We can rely on getting an event when the
+					// annotation gets removed so we set twice of the default sync-period to not cause additional reconciles.
+					RetryAfterSeconds: 20 * 60,
+					CommonResponse: runtimehooksv1.CommonResponse{
+						Message: message,
+					},
+				},
+			})
+
+			log.Info(fmt.Sprintf("Cluster upgrade to version %q is blocked by %q hook (via annotations)", desiredVersion, runtimecatalog.HookName(runtimehooksv1.BeforeClusterUpgrade)), "hooks", strings.Join(hookAnnotations, ","))
+			return *currentVersion, nil
+		}
+
 		// At this point the control plane and the machine deployments are stable and we are almost ready to pick
 		// up the desiredVersion. Call the BeforeClusterUpgrade hook before picking up the desired version.
 		hookRequest := &runtimehooksv1.BeforeClusterUpgradeRequest{

@@ -34,7 +34,9 @@ const (
 // MachinePoolSpec defines the desired state of MachinePool.
 type MachinePoolSpec struct {
 	// clusterName is the name of the Cluster this object belongs to.
+	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	ClusterName string `json:"clusterName"`
 
 	// replicas is the number of desired machines. Defaults to 1.
@@ -43,6 +45,7 @@ type MachinePoolSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// template describes the machines that will be created.
+	// +required
 	Template clusterv1.MachineTemplateSpec `json:"template"`
 
 	// minReadySeconds is the minimum number of seconds for which a newly created machine instances should
@@ -55,10 +58,16 @@ type MachinePoolSpec struct {
 	// providerIDList are the identification IDs of machine instances provided by the provider.
 	// This field must match the provider IDs as seen on the node objects corresponding to a machine pool's machine instances.
 	// +optional
+	// +kubebuilder:validation:MaxItems=10000
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=512
 	ProviderIDList []string `json:"providerIDList,omitempty"`
 
 	// failureDomains is the list of failure domains this MachinePool should be attached to.
 	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=256
 	FailureDomains []string `json:"failureDomains,omitempty"`
 }
 
@@ -70,6 +79,7 @@ type MachinePoolSpec struct {
 type MachinePoolStatus struct {
 	// nodeRefs will point to the corresponding Nodes if it they exist.
 	// +optional
+	// +kubebuilder:validation:MaxItems=10000
 	NodeRefs []corev1.ObjectReference `json:"nodeRefs,omitempty"`
 
 	// replicas is the most recently observed number of replicas.
@@ -109,11 +119,13 @@ type MachinePoolStatus struct {
 	// Deprecated: This field is deprecated and is going to be removed in the next apiVersion. Please see https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md for more details.
 	//
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=10240
 	FailureMessage *string `json:"failureMessage,omitempty"`
 
 	// phase represents the current phase of cluster actuation.
-	// E.g. Pending, Running, Terminating, Failed etc.
 	// +optional
+	// +kubebuilder:validation:Enum=Pending;Provisioning;Provisioned;Running;ScalingUp;ScalingDown;Scaling;Deleting;Failed;Unknown
 	Phase string `json:"phase,omitempty"`
 
 	// bootstrapReady is the state of the bootstrap provider.
@@ -259,10 +271,17 @@ func (m *MachinePoolStatus) GetTypedPhase() MachinePoolPhase {
 
 // MachinePool is the Schema for the machinepools API.
 type MachinePool struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard object's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MachinePoolSpec   `json:"spec,omitempty"`
+	// spec is the desired state of MachinePool.
+	// +optional
+	Spec MachinePoolSpec `json:"spec,omitempty"`
+	// status is the observed state of MachinePool.
+	// +optional
 	Status MachinePoolStatus `json:"status,omitempty"`
 }
 
@@ -297,8 +316,12 @@ func (m *MachinePool) SetV1Beta2Conditions(conditions []metav1.Condition) {
 // MachinePoolList contains a list of MachinePool.
 type MachinePoolList struct {
 	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard list's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#lists-and-simple-kinds
+	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []MachinePool `json:"items"`
+	// items is the list of MachinePools.
+	Items []MachinePool `json:"items"`
 }
 
 func init() {

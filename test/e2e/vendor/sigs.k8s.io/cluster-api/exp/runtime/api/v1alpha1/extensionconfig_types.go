@@ -27,6 +27,7 @@ import (
 // ExtensionConfigSpec defines the desired state of ExtensionConfig.
 type ExtensionConfigSpec struct {
 	// clientConfig defines how to communicate with the Extension server.
+	// +required
 	ClientConfig ClientConfig `json:"clientConfig"`
 
 	// namespaceSelector decides whether to call the hook for an object based
@@ -62,6 +63,8 @@ type ClientConfig struct {
 	// allowed either.
 	//
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	URL *string `json:"url,omitempty"`
 
 	// service is a reference to the Kubernetes service for the Extension server.
@@ -74,20 +77,30 @@ type ClientConfig struct {
 
 	// caBundle is a PEM encoded CA bundle which will be used to validate the Extension server's server certificate.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=51200
 	CABundle []byte `json:"caBundle,omitempty"`
 }
 
 // ServiceReference holds a reference to a Kubernetes Service of an Extension server.
 type ServiceReference struct {
 	// namespace is the namespace of the service.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 
 	// name is the name of the service.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
 	// path is an optional URL path and if present may be any string permissible in
 	// a URL. If a path is set it will be used as prefix to the hook-specific path.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	Path *string `json:"path,omitempty"`
 
 	// port is the port on the service that's hosting the Extension server.
@@ -107,6 +120,7 @@ type ExtensionConfigStatus struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=512
 	Handlers []ExtensionHandler `json:"handlers,omitempty"`
 
 	// conditions define the current service state of the ExtensionConfig.
@@ -133,9 +147,13 @@ type ExtensionConfigV1Beta2Status struct {
 // ExtensionHandler specifies the details of a handler for a particular runtime hook registered by an Extension server.
 type ExtensionHandler struct {
 	// name is the unique name of the ExtensionHandler.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	Name string `json:"name"`
 
 	// requestHook defines the versioned runtime hook which this ExtensionHandler serves.
+	// +required
 	RequestHook GroupVersionHook `json:"requestHook"`
 
 	// timeoutSeconds defines the timeout duration for client calls to the ExtensionHandler.
@@ -146,15 +164,22 @@ type ExtensionHandler struct {
 	// failurePolicy defines how failures in calls to the ExtensionHandler should be handled by a client.
 	// Defaults to Fail if not set.
 	// +optional
+	// +kubebuilder:validation:Enum=Ignore;Fail
 	FailurePolicy *FailurePolicy `json:"failurePolicy,omitempty"`
 }
 
 // GroupVersionHook defines the runtime hook when the ExtensionHandler is called.
 type GroupVersionHook struct {
 	// apiVersion is the group and version of the Hook.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	APIVersion string `json:"apiVersion"`
 
 	// hook is the name of the hook.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
 	Hook string `json:"hook"`
 }
 
@@ -183,13 +208,18 @@ const (
 
 // ExtensionConfig is the Schema for the ExtensionConfig API.
 type ExtensionConfig struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard object's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// spec is the desired state of the ExtensionConfig
+	// spec is the desired state of the ExtensionConfig.
+	// +optional
 	Spec ExtensionConfigSpec `json:"spec,omitempty"`
 
 	// status is the current state of the ExtensionConfig
+	// +optional
 	Status ExtensionConfigStatus `json:"status,omitempty"`
 }
 
@@ -224,8 +254,12 @@ func (e *ExtensionConfig) SetV1Beta2Conditions(conditions []metav1.Condition) {
 // ExtensionConfigList contains a list of ExtensionConfig.
 type ExtensionConfigList struct {
 	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard list's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#lists-and-simple-kinds
+	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ExtensionConfig `json:"items"`
+	// items is the list of ExtensionConfigs.
+	Items []ExtensionConfig `json:"items"`
 }
 
 func init() {

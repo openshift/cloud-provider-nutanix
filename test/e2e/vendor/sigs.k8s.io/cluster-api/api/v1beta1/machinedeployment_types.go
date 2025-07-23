@@ -241,7 +241,9 @@ const (
 // MachineDeploymentSpec defines the desired state of MachineDeployment.
 type MachineDeploymentSpec struct {
 	// clusterName is the name of the Cluster this object belongs to.
+	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	ClusterName string `json:"clusterName"`
 
 	// replicas is the number of desired machines.
@@ -276,9 +278,11 @@ type MachineDeploymentSpec struct {
 	// selector is the label selector for machines. Existing MachineSets whose machines are
 	// selected by this will be the ones affected by this deployment.
 	// It must match the machine template's labels.
+	// +required
 	Selector metav1.LabelSelector `json:"selector"`
 
 	// template describes the machines that will be created.
+	// +required
 	Template MachineTemplateSpec `json:"template"`
 
 	// strategy is the deployment strategy to use to replace existing machines with
@@ -438,6 +442,7 @@ type MachineNamingStrategy struct {
 	// without vowels, of length 5. This variable is required part of the
 	// template. If not provided, validation will fail.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
 	Template string `json:"template,omitempty"`
 }
@@ -454,6 +459,8 @@ type MachineDeploymentStatus struct {
 	// by clients. The string will be in the same format as the query-param syntax.
 	// More info about label selectors: http://kubernetes.io/docs/user-guide/labels#label-selectors
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
 	Selector string `json:"selector,omitempty"`
 
 	// replicas is the total number of non-terminated machines targeted by this deployment
@@ -488,6 +495,7 @@ type MachineDeploymentStatus struct {
 
 	// phase represents the current phase of a MachineDeployment (ScalingUp, ScalingDown, Running, Failed, or Unknown).
 	// +optional
+	// +kubebuilder:validation:Enum=ScalingUp;ScalingDown;Running;Failed;Unknown
 	Phase string `json:"phase,omitempty"`
 
 	// conditions defines current service state of the MachineDeployment.
@@ -582,10 +590,17 @@ func (md *MachineDeploymentStatus) GetTypedPhase() MachineDeploymentPhase {
 
 // MachineDeployment is the Schema for the machinedeployments API.
 type MachineDeployment struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard object's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MachineDeploymentSpec   `json:"spec,omitempty"`
+	// spec is the desired state of MachineDeployment.
+	// +optional
+	Spec MachineDeploymentSpec `json:"spec,omitempty"`
+	// status is the observed state of MachineDeployment.
+	// +optional
 	Status MachineDeploymentStatus `json:"status,omitempty"`
 }
 
@@ -594,8 +609,12 @@ type MachineDeployment struct {
 // MachineDeploymentList contains a list of MachineDeployment.
 type MachineDeploymentList struct {
 	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard list's metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#lists-and-simple-kinds
+	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []MachineDeployment `json:"items"`
+	// items is the list of MachineDeployments.
+	Items []MachineDeployment `json:"items"`
 }
 
 func init() {

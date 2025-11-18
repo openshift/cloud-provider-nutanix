@@ -11,18 +11,20 @@ const (
 	CategoriesKey = "categories"
 )
 
-// ErrNotFound is returned by Get() for missing keys
-var ErrNotFound = fmt.Errorf("environment key not found")
+var (
+	// ErrNotFound is returned by Get() for missing keys
+	ErrNotFound = fmt.Errorf("environment key not found")
+)
 
 // ApiCredentials is set of identifiers and secrets used to authenticate with
 // the underlying infrastructure.
 type ApiCredentials struct {
 	// Username for basic authentication
-	Username string
+	Username string `json:"username,omitempty"`
 	// Password for basic authentication
-	Password string
+	Password string `json:"password,omitempty"`
 	// KeyPair is JSON-encoded key pair for TLS client authentication
-	KeyPair string
+	KeyPair string `json:"keyPair,omitempty"`
 }
 
 // ManagementEndpoint specifies API endpoint used for interacting with underlying
@@ -31,14 +33,14 @@ type ManagementEndpoint struct {
 	// ApiCredentials embedded into endpoint
 	ApiCredentials
 	// Address is URL of management endpoint
-	Address *url.URL
+	Address *url.URL `json:"address,omitempty"`
 	// Whether to authenticate TLS endpoint in case of HTTPS as transport.
 	// HTTPS is used for encryption independent of this setting. An
 	// unauthenticated TLS endpoint is prone to man-in-the-middle attacks.
-	Insecure bool
+	Insecure bool `json:"insecure,omitempty"`
 	// AdditionalTrustBundle is a PEM-encoded certificate bundle to be used
 	// in addition to system trust store
-	AdditionalTrustBundle string
+	AdditionalTrustBundle string `json:"additionalTrustBundle,omitempty"`
 }
 
 // Topology is a map of topological domains to topological segments.

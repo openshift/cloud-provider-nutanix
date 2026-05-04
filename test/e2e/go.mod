@@ -136,3 +136,5 @@ require (
 )
 
 replace github.com/cloudflare/circl => github.com/cloudflare/circl v1.3.7 // CVE: https://github.com/advisories/GHSA-9763-4f94-gfch
+
+replace google.golang.org/grpc => github.com/openshift-sustaining/grpc-go v1.71.3-sec.1

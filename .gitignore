@@ -18,6 +18,7 @@ cloud-provider-nutanix
 
 # Go workspace file
 go.work
+!**/vendor/**
 
 .DS_Store
 .idea

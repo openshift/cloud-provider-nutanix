@@ -22,6 +22,7 @@ type Client[
 	Host,
 	Category,
 	Image,
+	ImageFile,
 	StorageContainer,
 	Subnet,
 	SubnetTaskReference,
@@ -31,11 +32,14 @@ type Client[
 	VolumeGroup,
 	VmAttachment,
 	DomainManagerEntity,
-	User any] struct {
+	User,
+	Template,
+	Ova,
+	OvaFile any] struct {
 	AntiAffinityPolicies AntiAffinityPolicies[AntiAffinityPolicy]
 	Clusters             Clusters[Cluster, VirtualGpuProfile, PhysicalGpuProfile, Host]
 	Categories           Categories[Category]
-	Images               Images[Image]
+	Images               Images[Image, ImageFile]
 	StorageContainers    StorageContainers[StorageContainer]
 	Subnets              Subnets[Subnet, SubnetTaskReference]
 	VMs                  VMs[VM]
@@ -43,6 +47,8 @@ type Client[
 	VolumeGroups         VolumeGroups[VolumeGroup, VmAttachment]
 	DomainManager        DomainManager[DomainManagerEntity]
 	Users                Users[User]
+	Templates            Templates[Template]
+	Ovas                 Ovas[Ova, OvaFile]
 	// Additional service interfaces can be added here as needed.
 }
 
@@ -194,6 +200,14 @@ type Operation[T any] interface {
 	UUID() string
 	Status() TaskStatus
 	Errors() []error
+}
+
+// VMConsoleToken holds the VNC console access credentials returned by
+// GenerateConsoleToken. Token is a JWT used for authentication and WsUri is the
+// relative WebSocket path to connect to the VM's VNC console.
+type VMConsoleToken struct {
+	Token string
+	WsUri string
 }
 
 // NoEntity is a placeholder for cases where no entity is returned (e.g. delete operations).

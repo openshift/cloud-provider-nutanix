@@ -21,19 +21,25 @@ import (
 	"os"
 	"time"
 
-	convergedV4 "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
-	"github.com/nutanix-cloud-native/prism-go-client/environment/credentials"
-	"github.com/nutanix-cloud-native/prism-go-client/environment/providers/local"
-	prismclientv4 "github.com/nutanix-cloud-native/prism-go-client/v4"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 
+	convergedV4 "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
+	"github.com/nutanix-cloud-native/prism-go-client/environment/credentials"
+	"github.com/nutanix-cloud-native/prism-go-client/environment/providers/local"
+	prismclientv4 "github.com/nutanix-cloud-native/prism-go-client/v4"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/constants"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/testing/mock"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/pkg/provider/config"
 )
+
+func unsetEnv(key string) {
+	Expect(os.Unsetenv(key)).To(Succeed()) //nolint:typecheck
+}
 
 var _ = Describe("Test Client", func() { // nolint:typecheck
 	var (
@@ -44,7 +50,27 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 	)
 
 	BeforeEach(func() { // nolint:typecheck
-		kClient = fake.NewSimpleClientset()
+		kClient = fake.NewSimpleClientset(
+			&v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "mock-cred",
+					Namespace: "mock-namespace",
+				},
+				Data: map[string][]byte{
+					credentials.KeyName: []byte(`[
+  {
+    "type": "basic_auth",
+    "data": {
+      "prismCentral":{
+        "username": "user",
+        "password": "password"
+      }
+    }
+  }
+]`),
+				},
+			},
+		)
 		config = mock.GenerateMockConfig()
 		informerFactory = informers.NewSharedInformerFactory(kClient, time.Minute)
 		nClient = nutanixClientEnvironment{
@@ -85,7 +111,13 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 		It("should return the management endpoint", func() { //nolint:typecheck
 			p := local.NewProvider()
 			err := os.Setenv("NUTANIX_ENDPOINT", "prism.nutanix.com")
-			defer os.Unsetenv("NUTANIX_ENDPOINT")
+			defer unsetEnv("NUTANIX_ENDPOINT")
+			Expect(err).To(BeNil()) //nolint:typecheck
+			err = os.Setenv("NUTANIX_USERNAME", "username")
+			defer unsetEnv("NUTANIX_USERNAME")
+			Expect(err).To(BeNil()) //nolint:typecheck
+			err = os.Setenv("NUTANIX_PASSWORD", "password")
+			defer unsetEnv("NUTANIX_PASSWORD")
 			Expect(err).To(BeNil()) //nolint:typecheck
 			nClient.env = p
 			Expect(nClient.ManagementEndpoint()).ToNot(BeZero()) //nolint:typecheck
@@ -109,7 +141,7 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 			p := local.NewProvider()
 			err := os.Setenv("NUTANIX_ENDPOINT", "prism.nutanix.com")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv("NUTANIX_ENDPOINT")
+			defer unsetEnv("NUTANIX_ENDPOINT")
 			nClient.env = p
 			client, err := nClient.Get()
 			Expect(err).ToNot(BeNil())
@@ -120,7 +152,7 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 			p := local.NewProvider()
 			err := os.Setenv("NUTANIX_ENDPOINT", "prism.nutanix.com")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv("NUTANIX_ENDPOINT")
+			defer unsetEnv("NUTANIX_ENDPOINT")
 			nClient.env = p
 			nClient.clientCache = convergedV4.NewClientCache(prismclientv4.WithSessionAuth(false))
 			client, err := nClient.Get()
@@ -132,15 +164,15 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 			p := local.NewProvider()
 			err := os.Setenv("NUTANIX_ENDPOINT", "prism.nutanix.com")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv("NUTANIX_ENDPOINT")
+			defer unsetEnv("NUTANIX_ENDPOINT")
 
 			err = os.Setenv("NUTANIX_USERNAME", "username")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv("NUTANIX_USERNAME")
+			defer unsetEnv("NUTANIX_USERNAME")
 
 			err = os.Setenv("NUTANIX_PASSWORD", "password")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv("NUTANIX_PASSWORD")
+			defer unsetEnv("NUTANIX_PASSWORD")
 
 			nClient.env = p
 			nClient.clientCache = convergedV4.NewClientCache(prismclientv4.WithSessionAuth(false))
@@ -159,7 +191,7 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 		It("should return error if CCM namespace is not set", func() { // nolint:typecheck
 			err := os.Setenv(constants.CCMNamespaceKey, "")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv(constants.CCMNamespaceKey)
+			defer unsetEnv(constants.CCMNamespaceKey)
 
 			Expect(nClient.setupEnvironment()).ToNot(BeNil())
 		})
@@ -167,7 +199,7 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 		It("should set the namespace for credential ref if not set", func() { // nolint:typecheck
 			err := os.Setenv(constants.CCMNamespaceKey, "kube-system")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv(constants.CCMNamespaceKey)
+			defer unsetEnv(constants.CCMNamespaceKey)
 
 			nClient.config.PrismCentral.CredentialRef.Namespace = ""
 			defer func() {
@@ -182,7 +214,7 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 		It("should set the namespace for additional trust bundle if not set", func() { // nolint:typecheck
 			err := os.Setenv(constants.CCMNamespaceKey, "kube-system")
 			Expect(err).To(BeNil())
-			defer os.Unsetenv(constants.CCMNamespaceKey)
+			defer unsetEnv(constants.CCMNamespaceKey)
 
 			nClient.config = mock.GenerateMockConfig()
 			nClient.config.PrismCentral.AdditionalTrustBundle = &credentials.NutanixTrustBundleReference{
@@ -197,6 +229,87 @@ var _ = Describe("Test Client", func() { // nolint:typecheck
 			err = nClient.setupEnvironment()
 			Expect(err).To(BeNil())
 			Expect(nClient.config.PrismCentral.AdditionalTrustBundle.Namespace).To(Equal("kube-system"))
+		})
+
+		It("should allow api_key-only credentials", func() { // nolint:typecheck
+			err := os.Setenv(constants.CCMNamespaceKey, "mock-namespace")
+			Expect(err).To(BeNil())
+			defer unsetEnv(constants.CCMNamespaceKey)
+
+			kClient = fake.NewSimpleClientset(
+				&v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "mock-cred",
+						Namespace: "mock-namespace",
+					},
+					Data: map[string][]byte{
+						credentials.KeyName: []byte(`[
+  {
+    "type": "api_key",
+    "data": {
+      "prismCentral":{
+        "apiKey": "test-api-key"
+      }
+    }
+  }
+]`),
+					},
+				},
+			)
+			informerFactory = informers.NewSharedInformerFactory(kClient, time.Minute)
+			nClient.SetInformers(informerFactory)
+			Expect(nClient.setupEnvironment()).To(BeNil())
+			me, err := nClient.env.GetManagementEndpoint(nil)
+			Expect(err).To(BeNil())
+			Expect(me.Address.String()).To(Equal("https://mock-address:9440"))
+			Expect(me.ApiCredentials.APIKey).To(Equal("test-api-key"))
+			Expect(me.ApiCredentials.Username).To(Equal(""))
+			Expect(me.ApiCredentials.Password).To(Equal(""))
+		})
+
+		It("should pick first credential type if multiple credentials are provided", func() { // nolint:typecheck
+			err := os.Setenv(constants.CCMNamespaceKey, "mock-namespace")
+			Expect(err).To(BeNil())
+			defer unsetEnv(constants.CCMNamespaceKey)
+
+			kClient = fake.NewSimpleClientset(
+				&v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "mock-cred",
+						Namespace: "mock-namespace",
+					},
+					Data: map[string][]byte{
+						credentials.KeyName: []byte(`[
+  {
+    "type": "basic_auth",
+    "data": {
+      "prismCentral":{
+        "username": "user",
+        "password": "password"
+      }
+    }
+  },
+  {
+    "type": "api_key",
+    "data": {
+      "prismCentral":{
+        "apiKey": "test-api-key"
+      }
+    }
+  }
+]`),
+					},
+				},
+			)
+			informerFactory = informers.NewSharedInformerFactory(kClient, time.Minute)
+			nClient.SetInformers(informerFactory)
+			Expect(nClient.setupEnvironment()).To(BeNil())
+			me, err := nClient.env.GetManagementEndpoint(nil)
+			Expect(err).To(BeNil())
+			Expect(me.Address.String()).To(Equal("https://mock-address:9440"))
+			Expect(me.ApiCredentials.APIKey).To(Equal(""))
+			Expect(me.ApiCredentials.Username).To(Equal("user"))
+			Expect(me.ApiCredentials.Password).To(Equal("password"))
 		})
 	})
 })

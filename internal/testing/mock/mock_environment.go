@@ -20,11 +20,12 @@ package mock
 import (
 	"context"
 
+	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/constants"
 	clusterModels "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/config"
 	prismModels "github.com/nutanix/ntnx-api-golang-clients/prism-go-client/v4/models/prism/v4/config"
 	vmmCommonModels "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/common/v1/config"
 	vmmModels "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/vmm/v4/ahv/config"
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega" //nolint:staticcheck
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -133,7 +134,9 @@ func CreateMockEnvironment(ctx context.Context, kClient *fake.Clientset) (*MockE
 			Value: ptr.To(ip),
 		}
 		nicNetInfo.Ipv4Info = vmmModels.NewIpv4Info()
-		nic.SetNicNetworkInfo(*nicNetInfo)
+		if err := nic.SetNicNetworkInfo(*nicNetInfo); err != nil {
+			return nil, err
+		}
 		filteredNics = append(filteredNics, *nic)
 	}
 	filteredAddressesVM.Nics = filteredNics
@@ -193,6 +196,18 @@ func CreateMockEnvironment(ctx context.Context, kClient *fake.Clientset) (*MockE
 		return nil, err
 	}
 
+	metroVM := getDefaultVMWithCustomAttributes(
+		MockVMNameMetro,
+		MockVMMetroUUID,
+		cluster,
+		host,
+		[]string{constants.MetroNodeGroupNameAttributeKey + ":" + MockMetroNodeGroupName, "otherKey:otherValue"},
+	)
+	metroNode, err := createNodeForVM(ctx, kClient, metroVM)
+	if err != nil {
+		return nil, err
+	}
+
 	return &MockEnvironment{
 		managedMockMachines: map[string]*vmmModels.Vm{
 			*poweredOnVM.ExtId:                  poweredOnVM,
@@ -204,6 +219,7 @@ func CreateMockEnvironment(ctx context.Context, kClient *fake.Clientset) (*MockE
 			*dpOffloadVM.ExtId:                  dpOffloadVM,
 			*secondaryIPsVM.ExtId:               secondaryIPsVM,
 			*customProviderIDVM.ExtId:           customProviderIDVM,
+			*metroVM.ExtId:                      metroVM,
 		},
 		managedMockClusters: map[string]*clusterModels.Cluster{
 			*cluster.ExtId:           cluster,
@@ -229,6 +245,7 @@ func CreateMockEnvironment(ctx context.Context, kClient *fake.Clientset) (*MockE
 			MockVMNameDpOffload:                  dpOffloadNode,
 			MockVMNameSecondaryIPs:               secondaryIPsNode,
 			MockVMNameCustomProviderID:           customProviderIDNode,
+			MockVMNameMetro:                      metroNode,
 		},
 		vmNameToExtId: map[string]string{
 			MockVMNamePoweredOn:                  *poweredOnVM.ExtId,
@@ -240,6 +257,7 @@ func CreateMockEnvironment(ctx context.Context, kClient *fake.Clientset) (*MockE
 			MockVMNameDpOffload:                  *dpOffloadVM.ExtId,
 			MockVMNameSecondaryIPs:               *secondaryIPsVM.ExtId,
 			MockVMNameCustomProviderID:           *customProviderIDVM.ExtId,
+			MockVMNameMetro:                      *metroVM.ExtId,
 		},
 	}, nil
 }

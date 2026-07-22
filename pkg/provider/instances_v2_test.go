@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/constants"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/testing/mock"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/pkg/provider/config"
 )
@@ -231,7 +232,7 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			Expect(err).ToNot(HaveOccurred())
 			_, err = i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			mock.CheckAdditionalLabels(updatedNode, vm, cluster, host)
 		})
@@ -243,7 +244,7 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			// PoweredOff VMs don't have host reference
 			_, err := i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			mock.CheckAdditionalLabels(updatedNode, vm, cluster, nil)
 		})
@@ -254,9 +255,37 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			i.nutanixManager.config.EnableCustomLabeling = false
 			_, err = i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updatedNode.Labels).To(BeEmpty())
+		})
+
+		It("should set the metro node-group label when the VM has the metro custom attribute", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNameMetro)
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).To(HaveKeyWithValue(constants.MetroNodeGroupLabel, mock.MockMetroNodeGroupName))
+		})
+
+		It("should set the metro node-group label even when custom labeling is disabled", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNameMetro)
+			i.nutanixManager.config.EnableCustomLabeling = false
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).To(HaveKeyWithValue(constants.MetroNodeGroupLabel, mock.MockMetroNodeGroupName))
+		})
+
+		It("should not set the metro node-group label for non-metro VMs", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNamePoweredOn)
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).ToNot(HaveKey(constants.MetroNodeGroupLabel))
 		})
 	})
 

@@ -22,6 +22,7 @@ type Client[
 	Host,
 	Category,
 	Image,
+	ImageFile,
 	StorageContainer,
 	Subnet,
 	SubnetTaskReference,
@@ -31,19 +32,37 @@ type Client[
 	VolumeGroup,
 	VmAttachment,
 	DomainManagerEntity,
-	User any] struct {
-	AntiAffinityPolicies AntiAffinityPolicies[AntiAffinityPolicy]
-	Clusters             Clusters[Cluster, VirtualGpuProfile, PhysicalGpuProfile, Host]
-	Categories           Categories[Category]
-	Images               Images[Image]
-	StorageContainers    StorageContainers[StorageContainer]
-	Subnets              Subnets[Subnet, SubnetTaskReference]
-	VMs                  VMs[VM]
-	Tasks                Tasks[Task, AppMessage]
-	VolumeGroups         VolumeGroups[VolumeGroup, VmAttachment]
-	DomainManager        DomainManager[DomainManagerEntity]
-	Users                Users[User]
-	// Additional service interfaces can be added here as needed.
+	User,
+	Role,
+	AuthorizationPolicy,
+	AuthorizationPolicyProjection,
+	Operation,
+	Template,
+	Ova,
+	OvaFile,
+	ProtectionPolicy,
+	RecoveryPlan,
+	Disk,
+	Alert any] struct {
+	AntiAffinityPolicies  AntiAffinityPolicies[AntiAffinityPolicy]
+	Clusters              Clusters[Cluster, VirtualGpuProfile, PhysicalGpuProfile, Host]
+	Categories            Categories[Category]
+	Images                Images[Image, ImageFile]
+	StorageContainers     StorageContainers[StorageContainer]
+	Subnets               Subnets[Subnet, SubnetTaskReference]
+	VMs                   VMs[VM]
+	Tasks                 Tasks[Task, AppMessage]
+	VolumeGroups          VolumeGroups[VolumeGroup, VmAttachment]
+	DomainManager         DomainManager[DomainManagerEntity]
+	Users                 Users[User]
+	Roles                 Roles[Role]
+	AuthorizationPolicies AuthorizationPolicies[AuthorizationPolicy, AuthorizationPolicyProjection]
+	Operations            Operations[Operation]
+	Templates             Templates[Template]
+	Ovas                  Ovas[Ova, OvaFile]
+	DataPolicies          DataPolicies[ProtectionPolicy, RecoveryPlan]
+	Disks                Disks[Disk]
+	Alerts               Alerts[Alert]
 }
 
 // Getter is the interface for Get operations.
@@ -194,6 +213,14 @@ type Operation[T any] interface {
 	UUID() string
 	Status() TaskStatus
 	Errors() []error
+}
+
+// VMConsoleToken holds the VNC console access credentials returned by
+// GenerateConsoleToken. Token is a JWT used for authentication and WsUri is the
+// relative WebSocket path to connect to the VM's VNC console.
+type VMConsoleToken struct {
+	Token string
+	WsUri string
 }
 
 // NoEntity is a placeholder for cases where no entity is returned (e.g. delete operations).

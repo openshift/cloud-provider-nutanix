@@ -24,11 +24,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go4.org/netipx"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/constants"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/internal/testing/mock"
 	"github.com/nutanix-cloud-native/cloud-provider-nutanix/pkg/provider/config"
 )
@@ -231,7 +233,7 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			Expect(err).ToNot(HaveOccurred())
 			_, err = i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			mock.CheckAdditionalLabels(updatedNode, vm, cluster, host)
 		})
@@ -243,7 +245,7 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			// PoweredOff VMs don't have host reference
 			_, err := i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			mock.CheckAdditionalLabels(updatedNode, vm, cluster, nil)
 		})
@@ -254,9 +256,37 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			i.nutanixManager.config.EnableCustomLabeling = false
 			_, err = i.InstanceMetadata(ctx, node)
 			Expect(err).ShouldNot(HaveOccurred())
-			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.ObjectMeta.Name, metav1.GetOptions{})
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updatedNode.Labels).To(BeEmpty())
+		})
+
+		It("should set the metro node-group label when the VM has the metro custom attribute", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNameMetro)
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).To(HaveKeyWithValue(constants.MetroNodeGroupLabel, mock.MockMetroNodeGroupName))
+		})
+
+		It("should set the metro node-group label even when custom labeling is disabled", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNameMetro)
+			i.nutanixManager.config.EnableCustomLabeling = false
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).To(HaveKeyWithValue(constants.MetroNodeGroupLabel, mock.MockMetroNodeGroupName))
+		})
+
+		It("should not set the metro node-group label for non-metro VMs", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNamePoweredOn)
+			_, err = i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			updatedNode, err := kClient.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updatedNode.Labels).ToNot(HaveKey(constants.MetroNodeGroupLabel))
 		})
 	})
 
@@ -265,6 +295,59 @@ var _ = Describe("Test InstancesV2", func() { // nolint:typecheck
 			manager := &nutanixManager{}
 			instances := newInstancesV2(manager)
 			Expect(instances).ToNot(BeNil())
+		})
+	})
+
+	Context("Test non-nutanix provider ownership", func() {
+		It("should skip InstanceExists for another-provider nodes", func() {
+			node := &v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "another-provider-node"},
+				Spec:       v1.NodeSpec{ProviderID: "another-provider://1234"},
+			}
+
+			exists, err := i.InstanceExists(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(exists).To(BeTrue())
+		})
+
+		It("should skip InstanceShutdown for another-provider nodes", func() {
+			node := &v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "another-provider-node"},
+				Spec:       v1.NodeSpec{ProviderID: "another-provider://1234"},
+			}
+
+			shutdown, err := i.InstanceShutdown(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(shutdown).To(BeFalse())
+		})
+
+		It("should skip InstanceMetadata for another-provider nodes", func() {
+			node := &v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "another-provider-node"},
+				Spec:       v1.NodeSpec{ProviderID: "another-provider://1234"},
+				Status: v1.NodeStatus{
+					Addresses: []v1.NodeAddress{
+						{Type: v1.NodeInternalIP, Address: "10.10.10.10"},
+						{Type: v1.NodeHostName, Address: "another-provider-node"},
+					},
+				},
+			}
+
+			metadata, err := i.InstanceMetadata(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(metadata).ToNot(BeNil())
+			Expect(metadata.ProviderID).To(Equal(node.Spec.ProviderID))
+			Expect(metadata.NodeAddresses).To(Equal(node.Status.Addresses))
+		})
+
+		It("should continue reconciling nutanix-managed nodes", func() {
+			node := mockEnvironment.GetNode(mock.MockVMNamePoweredOn)
+			Expect(node).ToNot(BeNil())
+			node.Spec.ProviderID = "nutanix://some-vm-id"
+
+			exists, err := i.InstanceExists(ctx, node)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(exists).To(BeTrue())
 		})
 	})
 })

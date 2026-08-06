@@ -6,6 +6,11 @@ PLATFORMS ?= linux/amd64,linux/arm64,linux/arm
 
 EXPORT_RESULT?=false # for CI please set EXPORT_RESULT to true
 
+# Auto-select credential type from API key on every make invocation.
+export NUTANIX_CREDENTIALS_TYPE = $(if $(strip $(NUTANIX_API_KEY)),api_key,basic_auth)
+NUTANIX_CREDENTIALS_OVERLAY ?= $(subst _,-,$(NUTANIX_CREDENTIALS_TYPE))
+export NUTANIX_CREDENTIALS_OVERLAY
+
 GOTESTPKGS = $(shell go list ./... | grep -v /internal | grep -v /test)
 
 ##@ Development
@@ -16,7 +21,7 @@ GOTESTPKGS = $(shell go list ./... | grep -v /internal | grep -v /test)
 
 .PHONY: build
 build: ## Build the project binary
-	go build -ldflags="-w -s -X 'main.version=${VERSION}'" -o=bin/nutanix-cloud-controller-manager .
+	CGO_ENABLED=0 go build -ldflags="-w -s -X 'main.version=${VERSION}'" -o=bin/nutanix-cloud-controller-manager .
 
 ## --------------------------------------
 ## Lint
@@ -56,7 +61,7 @@ docker-push: ## Build and push the image to the registry
 
 .PHONY: unit-test
 unit-test: ## Run the unit tests of the project
-	go test -v  $(GOTESTPKGS)
+	CGO_ENABLED=0 go test -v  $(GOTESTPKGS)
 
 .PHONY: unit-test-html
 unit-test-html: unit-test ## Run the unit tests of the project and export the coverage
@@ -64,7 +69,7 @@ unit-test-html: unit-test ## Run the unit tests of the project and export the co
 
 .PHONY: coverage
 coverage: ## Run the tests of the project and export the coverage
-	go test -cover -covermode=count -coverprofile=profile.cov  $(GOTESTPKGS)
+	CGO_ENABLED=0 go test -cover -covermode=count -coverprofile=profile.cov  $(GOTESTPKGS)
 	go tool cover -func profile.cov
 ifeq ($(EXPORT_RESULT), true)
 	gocov convert profile.cov | gocov-xml > coverage.xml
@@ -122,8 +127,10 @@ include ./openshift/openshift.mk
 
 .PHONY: deployment-manifests
 deployment-manifests: ## Generate the deployment manifests
-	mkdir -p $(ARTIFACTS)/manifests
-	cat manifests/*.yaml | envsubst > $(ARTIFACTS)/manifests/deploy_ccm.yaml
+	echo "Setting NUTANIX_CREDENTIALS_TYPE: $(NUTANIX_CREDENTIALS_TYPE)"; \
+	echo "Using manifest overlay: $(NUTANIX_CREDENTIALS_OVERLAY)"; \
+	mkdir -p $(ARTIFACTS)/manifests; \
+	kubectl kustomize overlays/manifests/$(NUTANIX_CREDENTIALS_OVERLAY) | envsubst > $(ARTIFACTS)/manifests/deploy_ccm.yaml
 
 .PHONY: deploy
 deploy: deployment-manifests ## Deploy the Nutanix Cloud Controller Manager to the cluster

@@ -9,12 +9,16 @@ on:
 jobs:
   e2e-test:
     runs-on:
-      - self-hosted-ncn-dind
+      - self-hosted-nutanix-docker-medium
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          # This reusable workflow is only invoked for approved, labeled PRs
+          # (see check_approvals in build-dev.yaml), so opting in to fork
+          # checkout under pull_request_target is safe.
+          allow-unsafe-pr-checkout: true
 
       - name: Install devbox
         uses: jetify-com/devbox-install-action@v0.14.0
@@ -56,6 +60,8 @@ jobs:
       - name: Test build
         run: devbox run -- make test-e2e LABEL_FILTERS='${{ inputs.e2e-labels }}'
         env:
+          NUTANIX_CREDENTIALS_TYPE: ${{ secrets.NUTANIX_API_KEY != '' && 'api_key' || 'basic_auth' }}
+          NUTANIX_API_KEY: ${{ secrets.NUTANIX_API_KEY }}
           NUTANIX_USER: ${{ secrets.NUTANIX_USER }}
           NUTANIX_PASSWORD: ${{ secrets.NUTANIX_PASSWORD }}
           NUTANIX_ENDPOINT: ${{ secrets.NUTANIX_ENDPOINT }}

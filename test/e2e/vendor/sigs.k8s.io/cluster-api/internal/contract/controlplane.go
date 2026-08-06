@@ -54,6 +54,33 @@ func (c *ControlPlaneContract) MachineTemplate() *ControlPlaneMachineTemplate {
 	return &ControlPlaneMachineTemplate{}
 }
 
+// IgnorePaths returns a list of paths to be ignored when reconciling an ControlPlane.
+// NOTE: The controlPlaneEndpoint struct currently contains two mandatory fields (host and port).
+// As the host and port fields are not using omitempty, they are automatically set to their zero values
+// if they are not set by the user. We don't want to reconcile the zero values as we would then overwrite
+// changes applied by the infrastructure provider controller.
+func (c *ControlPlaneContract) IgnorePaths(controlPlane *unstructured.Unstructured) ([]Path, error) {
+	var ignorePaths []Path
+
+	host, ok, err := unstructured.NestedString(controlPlane.UnstructuredContent(), ControlPlane().ControlPlaneEndpoint().host().Path()...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to retrieve %s", ControlPlane().ControlPlaneEndpoint().host().Path().String())
+	}
+	if ok && host == "" {
+		ignorePaths = append(ignorePaths, ControlPlane().ControlPlaneEndpoint().host().Path())
+	}
+
+	port, ok, err := unstructured.NestedInt64(controlPlane.UnstructuredContent(), ControlPlane().ControlPlaneEndpoint().port().Path()...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to retrieve %s", ControlPlane().ControlPlaneEndpoint().port().Path().String())
+	}
+	if ok && port == 0 {
+		ignorePaths = append(ignorePaths, ControlPlane().ControlPlaneEndpoint().port().Path())
+	}
+
+	return ignorePaths, nil
+}
+
 // Version provide access to version field in a ControlPlane object, if any.
 // NOTE: When working with unstructured there is no way to understand if the ControlPlane provider
 // do support a field in the type definition from the fact that a field is not set in a given instance.
@@ -75,7 +102,7 @@ func (c *ControlPlaneContract) StatusVersion() *String {
 func (c *ControlPlaneContract) Initialized(contractVersion string) *Bool {
 	if contractVersion == "v1beta1" {
 		return &Bool{
-			path: []string{"status", "ready"},
+			path: []string{"status", "initialized"},
 		}
 	}
 
@@ -88,6 +115,13 @@ func (c *ControlPlaneContract) Initialized(contractVersion string) *Bool {
 func (c *ControlPlaneContract) ControlPlaneEndpoint() *ControlPlaneEndpoint {
 	return &ControlPlaneEndpoint{
 		path: []string{"spec", "controlPlaneEndpoint"},
+	}
+}
+
+// RolloutAfter provides access to the rolloutAfter spec field.
+func (c *ControlPlaneContract) RolloutAfter() *Time {
+	return &Time{
+		path: Path{"spec", "rollout", "after"},
 	}
 }
 
@@ -187,7 +221,7 @@ func (c *ControlPlaneContract) ExternalManagedControlPlane() *Bool {
 // IsProvisioning returns true if the control plane is being created for the first time.
 // Returns false, if the control plane was already previously provisioned.
 func (c *ControlPlaneContract) IsProvisioning(obj *unstructured.Unstructured) (bool, error) {
-	// We can know if the control plane was previously created or is being cretaed for the first
+	// We can know if the control plane was previously created or is being created for the first
 	// time by looking at controlplane.status.version. If the version in status is set to a valid
 	// value then the control plane was already provisioned at a previous time. If not, we can
 	// assume that the control plane is being created for the first time.
@@ -501,6 +535,67 @@ func (m *ReadinessGates) Set(obj *unstructured.Unstructured, readinessGates []cl
 	}
 
 	jsonValue, err := json.Marshal(readinessGates)
+	if err != nil {
+		return errors.Wrapf(err, "failed to Marshal control plane %s", "."+m.Path().String())
+	}
+	var unstructuredValue []interface{}
+	if err := json.Unmarshal(jsonValue, &unstructuredValue); err != nil {
+		return errors.Wrapf(err, "failed to Unmarshal control plane %s", "."+m.Path().String())
+	}
+	if err := unstructured.SetNestedSlice(obj.UnstructuredContent(), unstructuredValue, m.Path()...); err != nil {
+		return errors.Wrapf(err, "failed to set control plane %s", "."+m.Path().String())
+	}
+	return nil
+}
+
+// Taints provides access to control plane's Taints.
+func (c *ControlPlaneMachineTemplate) Taints() *Taints {
+	return &Taints{
+		path: []string{"spec", "machineTemplate", "spec", "taints"},
+	}
+}
+
+// Taints provides a helper struct for working with Taints.
+type Taints struct {
+	path Path
+}
+
+// Path returns the path of the Taints.
+func (m *Taints) Path() Path {
+	return m.path
+}
+
+// Get gets the Taints object.
+func (m *Taints) Get(obj *unstructured.Unstructured) ([]clusterv1.MachineTaint, error) {
+	unstructuredValue, ok, err := unstructured.NestedSlice(obj.UnstructuredContent(), m.Path()...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to retrieve control plane %s", "."+m.Path().String())
+	}
+	if !ok {
+		return nil, errors.Wrapf(ErrFieldNotFound, "path %s", "."+m.Path().String())
+	}
+
+	var taints []clusterv1.MachineTaint
+	jsonValue, err := json.Marshal(unstructuredValue)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to Marshal control plane %s", "."+m.Path().String())
+	}
+	if err := json.Unmarshal(jsonValue, &taints); err != nil {
+		return nil, errors.Wrapf(err, "failed to Unmarshal control plane %s", "."+m.Path().String())
+	}
+
+	return taints, nil
+}
+
+// Set sets the Taints value.
+// Note: in case the value is nil, the system assumes that the control plane do not implement the optional list of taints.
+func (m *Taints) Set(obj *unstructured.Unstructured, taints []clusterv1.MachineTaint) error {
+	unstructured.RemoveNestedField(obj.UnstructuredContent(), m.Path()...)
+	if taints == nil {
+		return nil
+	}
+
+	jsonValue, err := json.Marshal(taints)
 	if err != nil {
 		return errors.Wrapf(err, "failed to Marshal control plane %s", "."+m.Path().String())
 	}

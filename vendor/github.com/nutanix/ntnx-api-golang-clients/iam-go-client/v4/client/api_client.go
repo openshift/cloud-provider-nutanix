@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/sirupsen/logrus"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	basic   = "basic"
-	eTag    = "ETag"
-	ifMatch = "If-Match"
+	basic      = "basic"
+	eTag       = "ETag"
+	ifMatch    = "If-Match"
+	sdkVersion = "v4.1.b3"
 )
 
 var (
@@ -40,7 +41,7 @@ var (
 	uriCheck                = regexp.MustCompile(`/(?P<namespace>[-\w]+)/v\d+\.\d+(\.[a|b]\d+)?/(?P<suffix>.*)`)
 	contentDispositionCheck = regexp.MustCompile("attachment;\\s*filename=\"(.*)\"")
 	retryStatusList         = []int{408, 429, 503, 504}
-	userAgent               = "Nutanix-iam/v4.0.1"
+	userAgent               = "Nutanix-iam/v4.1.2-beta.3"
 )
 
 /*
@@ -60,44 +61,39 @@ var (
     RetryInterval (optional) : Interval between successive retry attempts (default: 3 sec)
     DownloadDirectory (optional) : Directory location on local for files to download (default: Current Directory)
     DownloadChunkSize (optional) : Chunk size in bytes for files to download (default: 8*1024 bytes)
-    RootCACertificateFile (string) : PEM encoded Root CA certificate file path
-    ClientCertificateFile (string) : PEM encoded client certificate file path
-    ClientKeyFile (string) : PEM encoded client key file path
     LoggerFile (optional) : Log file to write activity logs
+    AllowVersionNegotiation (optional) : Flag to enable version negotiation
 */
 type ApiClient struct {
-	Scheme                string `json:"scheme,omitempty"`
-	Host                  string `json:"host,omitempty"`
-	Port                  int    `json:"port,omitempty"`
-	Username              string `json:"username,omitempty"`
-	Password              string `json:"password,omitempty"`
-	Debug                 bool   `json:"debug,omitempty"`
-	VerifySSL             bool
-	Proxy                 *Proxy
-	MaxRetryAttempts      int           `json:"maxRetryAttempts,omitempty"`
-	MaxRedirects          int           `json:"maxRedirects,omitempty"`
-	ReadTimeout           time.Duration `json:"readTimeout,omitempty"`
-	ConnectTimeout        time.Duration `json:"connectTimeout,omitempty"`
-	RetryInterval         time.Duration `json:"retryInterval,omitempty"`
-	DownloadDirectory     string        `json:"downloadDirectory,omitempty"`
-	DownloadChunkSize     int           `json:"downloadChunkSize,omitempty"`
-	RootCACertificateFile string
-	ClientCertificateFile string
-	ClientKeyFile         string
-	LoggerFile            string `json:"loggerFile,omitempty"`
-	defaultHeaders        map[string]string
-	retryClient           *retryablehttp.Client
-	httpClient            *http.Client
-	dialer                *net.Dialer
-	authentication        map[string]interface{}
-	cookie                string
-	refreshCookie         bool
-	previousAuth          string
-	basicAuth             *BasicAuth
-	previousRootCA        string
-	previousClientCert    string
-	previousClientKey     string
-	logger                *logrus.Logger
+	Scheme                  string `json:"scheme,omitempty"`
+	Host                    string `json:"host,omitempty"`
+	Port                    int    `json:"port,omitempty"`
+	Username                string `json:"username,omitempty"`
+	Password                string `json:"password,omitempty"`
+	Debug                   bool   `json:"debug,omitempty"`
+	VerifySSL               bool
+	Proxy                   *Proxy
+	MaxRetryAttempts        int           `json:"maxRetryAttempts,omitempty"`
+	MaxRedirects            int           `json:"maxRedirects,omitempty"`
+	ReadTimeout             time.Duration `json:"readTimeout,omitempty"`
+	ConnectTimeout          time.Duration `json:"connectTimeout,omitempty"`
+	RetryInterval           time.Duration `json:"retryInterval,omitempty"`
+	DownloadDirectory       string        `json:"downloadDirectory,omitempty"`
+	DownloadChunkSize       int           `json:"downloadChunkSize,omitempty"`
+	LoggerFile              string        `json:"loggerFile,omitempty"`
+	AllowVersionNegotiation bool          `json:"allowVersionNegotiation,omitempty"`
+	negotiatedVersion       string
+	negotiationCompleted    bool
+	defaultHeaders          map[string]string
+	retryClient             *retryablehttp.Client
+	httpClient              *http.Client
+	dialer                  *net.Dialer
+	authentication          map[string]interface{}
+	cookie                  string
+	refreshCookie           bool
+	previousAuth            string
+	basicAuth               *BasicAuth
+	logger                  *logrus.Logger
 
 	// maxIdleConns controls the maximum number of idle (keep-alive)
 	// connections across all hosts. Zero means no limit.
@@ -121,7 +117,15 @@ type ApiClient struct {
 
 	// Timeout for the time spent during TLS handshake
 	tlsHandshakeTimeout time.Duration
+
+	// additionalCAs holds PEM-encoded CA certificate(s) to trust
+	additionalCAs         []byte
+	isAdditionalCAChanged bool
 }
+
+// EmptyResponse represents a valid empty response (e.g., HTTP 204 No Content).
+// It is used to distinguish between an expected empty response and an unexpected nil response.
+type EmptyResponse struct{}
 
 // Returns a newly generated ApiClient instance populated with default values
 func NewApiClient() *ApiClient {
@@ -137,27 +141,32 @@ func NewApiClient() *ApiClient {
 	currentDirectory, _ := os.Getwd()
 
 	a := &ApiClient{
-		Scheme:              "https",
-		Host:                "localhost",
-		Port:                9440,
-		Debug:               false,
-		VerifySSL:           true,
-		MaxRetryAttempts:    5,
-		MaxRedirects:        10,
-		ReadTimeout:         30 * time.Second,
-		ConnectTimeout:      30 * time.Second,
-		RetryInterval:       3 * time.Second,
-		DownloadDirectory:   currentDirectory,
-		DownloadChunkSize:   8 * 1024,
-		maxIdleConns:        10,
-		maxIdleConnsPerHost: 10,
-		maxConnsPerHost:     100,
-		idleConnTimeout:     90 * time.Second,
-		tlsHandshakeTimeout: 10 * time.Second,
-		defaultHeaders:      make(map[string]string),
-		refreshCookie:       true,
-		basicAuth:           basicAuth,
-		authentication:      authentication,
+		Scheme:                  "https",
+		Host:                    "localhost",
+		Port:                    9440,
+		Debug:                   false,
+		VerifySSL:               true,
+		MaxRetryAttempts:        5,
+		MaxRedirects:            10,
+		ReadTimeout:             30 * time.Second,
+		ConnectTimeout:          30 * time.Second,
+		RetryInterval:           3 * time.Second,
+		DownloadDirectory:       currentDirectory,
+		DownloadChunkSize:       8 * 1024,
+		maxIdleConns:            10,
+		maxIdleConnsPerHost:     10,
+		maxConnsPerHost:         100,
+		idleConnTimeout:         90 * time.Second,
+		tlsHandshakeTimeout:     10 * time.Second,
+		defaultHeaders:          make(map[string]string),
+		refreshCookie:           true,
+		basicAuth:               basicAuth,
+		authentication:          authentication,
+		additionalCAs:           nil,
+		isAdditionalCAChanged:   false,
+		negotiatedVersion:       "",
+		AllowVersionNegotiation: true,
+		negotiationCompleted:    false,
 	}
 
 	a.setupClient()
@@ -168,15 +177,43 @@ func NewApiClient() *ApiClient {
 func (a *ApiClient) AddDefaultHeader(headerName string, headerValue string) {
 	if headerName == "Authorization" {
 		a.cookie = ""
+		a.refreshCookie = true
 	}
 
 	a.defaultHeaders[headerName] = headerValue
 }
 
-// Makes the HTTP request with given options and returns response body as byte array.
+// Makes the HTTP request with given options which returns response body as byte array.
 func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 	queryParams url.Values, headerParams map[string]string, formParams url.Values,
 	accepts []string, contentType []string, authNames []string) (interface{}, error) {
+
+	return a.CallApiWithContext(context.Background(), uri, httpMethod, body, queryParams, headerParams,
+		formParams, accepts, contentType, authNames)
+}
+
+// Makes the HTTP request with context and given options which returns response body as byte array.
+func (a *ApiClient) CallApiWithContext(ctx context.Context, uri *string, httpMethod string, body interface{},
+	queryParams url.Values, headerParams map[string]string, formParams url.Values,
+	accepts []string, contentType []string, authNames []string) (interface{}, error) {
+	if a.AllowVersionNegotiation && !a.negotiationCompleted {
+		a.NegotiateVersion(authNames)
+	}
+	return a.callApiInternal(ctx, uri, httpMethod, body, queryParams, headerParams,
+		formParams, accepts, contentType, authNames)
+}
+
+func (a *ApiClient) callApiInternal(ctx context.Context, uri *string, httpMethod string, body interface{},
+	queryParams url.Values, headerParams map[string]string, formParams url.Values,
+	accepts []string, contentType []string, authNames []string) (interface{}, error) {
+
+	if a.negotiatedVersion != "" && a.negotiatedVersion != sdkVersion {
+		if match, _ := regexp.MatchString(`v\d+\.\d+(\.[a|b]\d+)?`, a.negotiatedVersion); match {
+			a.logger.Infof("Changing uri %s to negotiated version %s", *uri, a.negotiatedVersion)
+			*uri = uriCheck.ReplaceAllString(*uri, fmt.Sprintf(`/${namespace}/%s/${suffix}`, a.negotiatedVersion))
+		}
+	}
+
 	path := a.Scheme + "://" + a.Host + ":" + strconv.Itoa(a.Port) + *uri
 
 	if headerParams["Authorization"] != "" {
@@ -217,18 +254,13 @@ func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 		addEtagReferenceToHeader(body, headerParams)
 	}
 
-	request, err := a.prepareRequest(path, httpMethod, body, headerParams, queryParams, formParams, authNames)
+	request, err := a.prepareRequest(ctx, path, httpMethod, body, headerParams, queryParams, formParams, authNames)
 	if err != nil {
 		a.logger.Error(err.Error())
 		return nil, err
 	}
 
 	a.setupClient()
-	// Remove Authorization header and reset cookie if we are establishing a mTLS connection
-	if a.previousRootCA != "" && a.previousClientKey != "" && a.previousClientCert != "" {
-		delete(request.Header, "Authorization")
-		a.cookie = ""
-	}
 
 	if a.Debug {
 		printBody := true
@@ -248,9 +280,9 @@ func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 	response, err := a.httpClient.Do(request)
 
 	// Retry one more time without the cookie but with basic auth header
-	if response != nil && response.StatusCode == 401 {
+	if response != nil && response.StatusCode == 401 && len(a.cookie) > 0 {
 		a.logger.Debug("Retrying the request to refresh cookie...")
-		request, _ = a.prepareRequest(path, httpMethod, body, headerParams, queryParams, formParams, authNames)
+		request, _ = a.prepareRequest(ctx, path, httpMethod, body, headerParams, queryParams, formParams, authNames)
 		a.refreshCookie = true
 		if len(a.previousAuth) > 0 {
 			request.Header["Authorization"] = []string{a.previousAuth}
@@ -268,7 +300,7 @@ func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 		if response.Header != nil && response.Header.Get("Location") != "" {
 			location := response.Header.Get("Location")
 			a.logger.Info("Redirecting to : " + location)
-			request, _ = a.prepareRequest(location, httpMethod, body, headerParams, queryParams, formParams, authNames)
+			request, _ = a.prepareRequest(ctx, location, httpMethod, body, headerParams, queryParams, formParams, authNames)
 			if response.Header.Get("X-Redirect-Token") != "" {
 				request.Header["Cookie"] = []string{response.Header.Get("X-Redirect-Token")}
 			}
@@ -282,9 +314,13 @@ func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 	}
 
 	binaryMediaTypes := []string{"application/octet-stream", "application/pdf", "application/zip"}
-	isBinaryResponse := response.Header != nil && a.Contains(binaryMediaTypes, response.Header.Get("Content-Type"))
-	textMediaTypes := []string{"text/event-stream", "text/html", "text/xml", "text/csv", "text/javascript", "text/markdown", "text/vcard"}
-	isTextResponse := response.Header != nil && a.Contains(textMediaTypes, response.Header.Get("Content-Type"))
+	textMediaTypes := []string{"text/event-stream", "text/html", "text/xml", "text/csv", "text/javascript", "text/markdown", "text/vcard", "text/plain"}
+	responseContentType, _, parseErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if parseErr != nil {
+		a.logger.Warnf("Failed to parse Content-Type header: %v", parseErr)
+	}
+	isBinaryResponse := response.Header != nil && a.Contains(binaryMediaTypes, responseContentType)
+	isTextResponse := response.Header != nil && a.Contains(textMediaTypes, responseContentType)
 
 	if a.Debug {
 		printBody := true
@@ -310,8 +346,16 @@ func (a *ApiClient) CallApi(uri *string, httpMethod string, body interface{},
 
 	a.updateCookies(response)
 
+	// Reset negotiation flags on 404 to allow future negotiation attempts
+	if response.StatusCode == 404 {
+		a.negotiationCompleted = false
+		a.negotiatedVersion = ""
+		a.logger.Errorf("Received 404 Not Found for request")
+	}
+
 	if response.StatusCode == 204 {
-		return nil, nil
+		response.Body.Close()
+		return &EmptyResponse{}, nil
 	}
 
 	if isBinaryResponse || isTextResponse {
@@ -392,16 +436,43 @@ func (a *ApiClient) GetAuthentication(authName string) interface{} {
 	return a.authentication[authName]
 }
 
+// Get fallback version negotiated with server
+func (a *ApiClient) GetNegotiatedVersion() string {
+	return a.negotiatedVersion
+}
+
 // Helper method to set username for the first HTTP basic authentication.
 func (a *ApiClient) SetUserName(username string) {
-	a.Username = username
-	a.basicAuth.UserName = username
+	credsChanged := a.Username != username
+	if credsChanged {
+		a.Username = username
+	}
+	if a.basicAuth != nil && a.basicAuth.UserName != username {
+		credsChanged = true
+		a.basicAuth.UserName = username
+	}
+	if credsChanged {
+		a.cookie = ""
+		a.refreshCookie = true
+		a.logger.Debug("Username changed, clearing existing cookie if any")
+	}
 }
 
 // Helper method to set password for the first HTTP basic authentication
 func (a *ApiClient) SetPassword(password string) {
-	a.Password = password
-	a.basicAuth.Password = password
+	credsChanged := a.Password != password
+	if credsChanged {
+		a.Password = password
+	}
+	if a.basicAuth != nil && a.basicAuth.Password != password {
+		credsChanged = true
+		a.basicAuth.Password = password
+	}
+	if credsChanged {
+		a.cookie = ""
+		a.refreshCookie = true
+		a.logger.Debug("Password changed, clearing existing cookie if any")
+	}
 }
 
 // Helper method to set API key value for the first API key authentication
@@ -478,6 +549,51 @@ func (a *ApiClient) SetRetryIntervalInMilliSeconds(ms int) {
 	a.RetryInterval = time.Duration(ms) * time.Millisecond
 }
 
+// SetHost sets the hostname for base URL and resets negotiation flags
+func (a *ApiClient) SetHost(host string) {
+	if a.Host == host {
+		return
+	}
+	a.Host = host
+	// Reset negotiation flags when host changes
+	a.negotiationCompleted = false
+	a.negotiatedVersion = ""
+	// Clear cookie if hostname changed
+	a.cookie = ""
+	a.refreshCookie = true
+	a.logger.Debug("Hostname changed, clearing existing cookie if any")
+}
+
+// SetAdditionalCACertificates sets CA certificate(s) from PEM-encoded bytes to be trusted
+// in addition to the system certificate pool. Both single and multiple certificates in
+// the PEM data are supported.
+// Passing nil or empty bytes is equivalent to calling ClearAdditionalCertificates.
+// Certificate validity is checked lazily during the next request; a warning is logged
+// if the PEM data contains no valid certificates.
+func (a *ApiClient) SetAdditionalCACertificates(certPEM []byte) error {
+	if len(certPEM) == 0 {
+		a.ClearAdditionalCertificates()
+		a.logger.Warnf("SetAdditionalCACertificates: PEM-encoded certificates list is empty, hence CA certificates will be cleared from truststore")
+		return nil
+	}
+	if bytes.Equal(a.additionalCAs, certPEM) {
+		return nil
+	}
+	a.isAdditionalCAChanged = true
+	a.additionalCAs = append([]byte(nil), certPEM...)
+	return nil
+}
+
+// ClearAdditionalCertificates removes any previously set additional CA certificates.
+// Safe to call when no additional certificates are configured.
+func (a *ApiClient) ClearAdditionalCertificates() {
+	if a.additionalCAs == nil {
+		return
+	}
+	a.additionalCAs = nil
+	a.isAdditionalCAChanged = true
+}
+
 func (a *ApiClient) setupClient() {
 	var isRetryClientModified = false
 	retryClientValue := reflect.ValueOf(a.retryClient)
@@ -491,14 +607,32 @@ func (a *ApiClient) setupClient() {
 
 	// Initialize/modify retryable http client's transport based on current configuration
 	var transport = a.retryClient.HTTPClient.Transport.(*http.Transport)
+
+	// Build TLS config with additional CAs if needed
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: !a.VerifySSL,
+	}
+
+	// Add additional CA certificates if any are configured
+	if len(a.additionalCAs) > 0 {
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil {
+			rootCAs = x509.NewCertPool()
+		}
+		if ok := rootCAs.AppendCertsFromPEM(a.additionalCAs); !ok {
+			a.logger.Errorf("SetAdditionalCACertificates: no valid PEM-encoded certificates found, additional CA certificates will not be applied")
+		}
+		tlsConfig.RootCAs = rootCAs
+	}
+
 	if isRetryClientModified || transport.TLSClientConfig == nil || transport.TLSClientConfig.InsecureSkipVerify != !a.VerifySSL ||
-		a.dialer == nil || a.dialer.Timeout != a.ConnectTimeout || shouldConfigureMutualTLS(a) {
+		a.isAdditionalCAChanged || a.dialer == nil || a.dialer.Timeout != a.ConnectTimeout {
 		a.dialer = &net.Dialer{
 			Timeout: getValidTimeout(a.ConnectTimeout, a),
 		}
 		transport := &http.Transport{
 			DialContext:           a.dialer.DialContext,
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: !a.VerifySSL},
+			TLSClientConfig:       tlsConfig,
 			MaxIdleConns:          a.maxIdleConns,
 			MaxIdleConnsPerHost:   a.maxIdleConnsPerHost,
 			MaxConnsPerHost:       a.maxConnsPerHost,
@@ -520,11 +654,9 @@ func (a *ApiClient) setupClient() {
 			})
 		}
 
-		// Configure mTLS to retryable http client's transport
-		configureMutualTLS(a, transport)
-
 		a.retryClient.HTTPClient.Transport = transport
 		isRetryClientModified = true
+		a.isAdditionalCAChanged = false
 	}
 
 	if a.retryClient.RetryMax != a.MaxRetryAttempts ||
@@ -558,66 +690,6 @@ func (a *ApiClient) setupClient() {
 	}
 }
 
-func shouldConfigureMutualTLS(a *ApiClient) bool {
-	return a.RootCACertificateFile != a.previousRootCA || a.ClientCertificateFile != a.previousClientCert || a.ClientKeyFile != a.previousClientKey
-}
-
-// Configure mTLS for the http transport
-func configureMutualTLS(a *ApiClient, transport *http.Transport) {
-	// Only configure if any of the current file paths have been changed
-	if shouldConfigureMutualTLS(a) {
-		a.previousRootCA = a.RootCACertificateFile
-		a.previousClientCert = a.ClientCertificateFile
-		a.previousClientKey = a.ClientKeyFile
-
-		rootCACert, err := os.ReadFile(a.RootCACertificateFile)
-		if err != nil {
-			a.logger.Errorf("Failed to open root certificate file: %v", err)
-			return
-		}
-
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(rootCACert)
-		x509RootCerts, err := decodePemToCerts(a, rootCACert)
-		if err != nil {
-			a.logger.Errorf("Unable to extract certificate chains from root CA pem file: %v", err)
-			return
-		}
-
-		clientCertificate, err := tls.LoadX509KeyPair(a.ClientCertificateFile, a.ClientKeyFile)
-		if err != nil {
-			a.logger.Errorf("Failed to load client certificate: %v", err)
-			return
-		}
-		// Add CA chain to client cert
-		for _, x509Cert := range x509RootCerts {
-			clientCertificate.Certificate = append(clientCertificate.Certificate, x509Cert.Raw)
-		}
-
-		transport.TLSClientConfig = &tls.Config{
-			RootCAs:      caCertPool,
-			Certificates: []tls.Certificate{clientCertificate},
-		}
-	}
-}
-
-// Decode a PEM encoded file and extract certificate chain
-func decodePemToCerts(a *ApiClient, encodedPem []byte) ([]x509.Certificate, error) {
-	certs := []x509.Certificate{}
-
-	for block, rest := pem.Decode(encodedPem); block != nil; block, rest = pem.Decode(rest) {
-		if block.Type == "CERTIFICATE" {
-			// Extract cert chain
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, errors.New("Unable to parse a certificate in provided pem and it seems to be corrupted...")
-			}
-			certs = append(certs, *cert)
-		}
-	}
-	return certs, nil
-}
-
 func configureLogger(a *ApiClient) {
 	if a.retryClient != nil {
 		a.retryClient.Logger = nil
@@ -643,7 +715,7 @@ func configureLogger(a *ApiClient) {
 			Formatter: &myFormatter{
 				logrus.TextFormatter{
 					FullTimestamp:          true,
-					TimestampFormat:        "2006-01-02 15:04:05.000",
+					TimestampFormat:        "2006-01-02 15:04:05.000Z",
 					ForceColors:            true,
 					DisableLevelTruncation: true,
 				},
@@ -662,6 +734,9 @@ type myFormatter struct {
 
 // Format function implementation for the Formatter interface of logrus
 func (f *myFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	// Modify the log entry time to UTC
+	entry.Time = entry.Time.UTC()
+
 	var b *bytes.Buffer
 
 	if entry.Buffer != nil {
@@ -716,6 +791,7 @@ func (a *ApiClient) selectHeaderAccept(accepts []string) string {
 
 // Build the request
 func (a *ApiClient) prepareRequest(
+	ctx context.Context,
 	path string, method string,
 	postBody interface{},
 	headerParams map[string]string,
@@ -795,6 +871,13 @@ func (a *ApiClient) prepareRequest(
 	// Add the user agent to the request.
 	localVarRequest.Header["User-Agent"] = []string{userAgent}
 
+	// Set the context to the request
+	if ctx != nil {
+		localVarRequest = localVarRequest.WithContext(ctx)
+	} else {
+		a.logger.Warnf("Context is nil. Using background context.")
+	}
+
 	// Authentication
 	a.SetUserName(a.Username)
 	a.SetPassword(a.Password)
@@ -838,8 +921,9 @@ func (a *ApiClient) prepareRequest(
 
 	a.previousAuth = localVarRequest.Header.Get("Authorization")
 
-	// Add the cookie to the request.
-	if len(a.cookie) > 0 {
+	// Add the cookie to the request if it exists and refreshCookie is false.
+	// Use username/password when cookie is not set or when we need to refresh cookie
+	if len(a.cookie) > 0 && !a.refreshCookie {
 		localVarRequest.Header["Cookie"] = []string{a.cookie}
 		delete(localVarRequest.Header, "Authorization")
 	}
@@ -851,6 +935,123 @@ func (a *ApiClient) prepareRequest(
 	}
 
 	return localVarRequest, nil
+}
+
+func (a *ApiClient) performNegotiationBetweenVersions(sdk string, server string) string {
+	if len(sdk) == 0 || len(server) == 0 {
+		return sdk
+	}
+	sdkProps := a.getVersionDetails(sdk)
+	serverProps := a.getVersionDetails(server)
+	// if major version is different, then do not negotiate
+	// maintain sdk version
+	if sdkProps["family"] != serverProps["family"] {
+		a.logger.Info("\nCannot negotiate versions with different major versions\n")
+		return sdk
+	}
+	// if sdk version is smaller than highest server version, then maintain sdk version
+	if a.isSmallerMinorVersion(sdkProps, serverProps) {
+		return sdk
+	}
+	// since sdk version is higher than highest server version, use server version
+	return server
+}
+
+func (a *ApiClient) isSmallerMinorVersion(p1 map[string]string, p2 map[string]string) bool {
+	// if revision different, then compare revision
+	p1Revision, _ := strconv.Atoi(p1["revision"])
+	p2Revision, _ := strconv.Atoi(p2["revision"])
+	if p1Revision != p2Revision {
+		return p1Revision < p2Revision
+	}
+	// revision is same, so compare version_type (release_type + release_type_revision)
+	if p1["versionType"] == "released" {
+		return false
+	}
+	p1ReleaseType := p1["versionType"][0:1]
+	p2ReleaseType := p2["versionType"][0:1]
+	p1ReleaseTypeRevision, _ := strconv.Atoi(p1["versionType"][1:])
+	p2ReleaseTypeRevision, _ := strconv.Atoi(p2["versionType"][1:])
+	if p2["versionType"] == "released" {
+		p2ReleaseTypeRevision = 0
+	}
+	if p1ReleaseType == p2ReleaseType {
+		// release type is same, so compare release type revision
+		return p1ReleaseTypeRevision < p2ReleaseTypeRevision
+	}
+	// release type is different, so alpha must be smallest and released must be largest
+	return p1ReleaseType == "a" || p2["versionType"] == "released"
+}
+
+func (a *ApiClient) getVersionDetails(version string) map[string]string {
+	ret := make(map[string]string)
+	if version == "unversioned" {
+		ret["family"] = "unversioned"
+		ret["versionType"] = "released"
+	} else {
+		versionParts := strings.Split(version, ".")
+		if versionParts[0] == "unversioned" {
+			ret["family"] = "unversioned"
+			ret["versionType"] = versionParts[1]
+		} else {
+			ret["family"] = versionParts[0][1:]
+			ret["revision"] = versionParts[1]
+			if len(versionParts) == 2 {
+				ret["versionType"] = "released"
+			} else {
+				ret["versionType"] = versionParts[2]
+			}
+		}
+	}
+	return ret
+}
+
+// Trigger OPTIONS API call and version negotiation manually
+func (a *ApiClient) NegotiateVersion(authNames []string) {
+	path := new(string)
+	*path = "/api/iam/unversioned/info"
+	response, err := a.callApiInternal(context.Background(), path, http.MethodOptions, nil, url.Values{}, make(map[string]string),
+		url.Values{}, []string{}, []string{"application/json"}, authNames)
+	if nil == err {
+		if _, ok := response.(*EmptyResponse); ok {
+			a.logger.Errorf("Could not fetch supported versions from server: received empty 204 response")
+			a.negotiatedVersion = ""
+			a.negotiationCompleted = false
+			return
+		}
+		unmarshalledResp := make(map[string]interface{})
+		err = json.Unmarshal(response.([]byte), &unmarshalledResp)
+		if nil == err {
+			if data, ok1 := unmarshalledResp["data"].(string); ok1 {
+				minimumSupportedVersion := "v4.1.b2"
+
+				// Check if server version is below minimum supported version
+				if a.isSmallerMinorVersion(a.getVersionDetails(data), a.getVersionDetails(minimumSupportedVersion)) {
+					a.logger.Warnf("Server version %s is below minimum supported version %s. Version negotiation will not be performed.", data, minimumSupportedVersion)
+					a.negotiatedVersion = ""
+					a.negotiationCompleted = false
+					return
+				}
+
+				a.negotiatedVersion = a.performNegotiationBetweenVersions(sdkVersion, data)
+				a.logger.Infof("Negotiated Version with server : %s", a.negotiatedVersion)
+				a.negotiationCompleted = true
+				return
+			} else {
+				a.logger.Errorf("Could not fetch supported versions from server")
+				a.negotiatedVersion = ""
+				a.negotiationCompleted = false
+			}
+		} else {
+			a.logger.Errorf("Could not unmarshal response from server")
+			a.negotiatedVersion = ""
+			a.negotiationCompleted = false
+		}
+	} else {
+		a.logger.Errorf("Could not fetch supported versions from server with error : %s", err)
+		a.negotiatedVersion = ""
+		a.negotiationCompleted = false
+	}
 }
 
 // RetryPolicy provides a callback for Client.CheckRetry, specifies retry on
@@ -938,7 +1139,8 @@ func (a *ApiClient) GetEtag(object interface{}) string {
 
 // Read ETag and add it to response
 func addEtagReferenceToResponse(headers http.Header, body []byte) []byte {
-	if etag := headers.Get(eTag); etag != "" {
+	etag := headers.Get(eTag)
+	if etag != "" {
 		responseMap := map[string]interface{}{}
 		json.Unmarshal(body, &responseMap)
 		if r, ok := responseMap["$reserved"].(map[string]interface{}); ok {

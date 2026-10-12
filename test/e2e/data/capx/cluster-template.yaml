@@ -44,6 +44,7 @@ data:
             "address": "${NUTANIX_ENDPOINT}",
             "port": ${NUTANIX_PORT=9440},
             "insecure": ${NUTANIX_INSECURE=false},
+            "pc-project": "${NUTANIX_PC_PROJECT=}",
             "credentialRef": {
               "kind": "secret",
               "name": "nutanix-creds",
@@ -598,6 +599,7 @@ spec:
       image:
         name: ${NUTANIX_MACHINE_TEMPLATE_IMAGE_NAME}
         type: name
+      project: ${NUTANIX_MACHINE_TEMPLATE_PROJECT=null}
       memorySize: ${NUTANIX_MACHINE_MEMORY_SIZE=4Gi}
       providerID: nutanix://${CLUSTER_NAME}-m1
       subnet:

@@ -62,7 +62,7 @@ type GenericWebhook struct {
 // Otherwise it returns false for an immediate fail.
 func DefaultShouldRetry(err error) bool {
 	// these errors indicate a transient error that should be retried.
-	if utilnet.IsConnectionReset(err) || apierrors.IsInternalError(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) {
+	if utilnet.IsConnectionReset(err) || utilnet.IsHTTP2ConnectionLost(err) || apierrors.IsInternalError(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) {
 		return true
 	}
 	// if the error sends the Retry-After header, we respect it as an explicit confirmation we should retry.
@@ -83,6 +83,7 @@ func NewGenericWebhook(scheme *runtime.Scheme, codecFactory serializer.CodecFact
 	clientConfig := rest.CopyConfig(config)
 
 	codec := codecFactory.LegacyCodec(groupVersions...)
+	clientConfig.ContentType = runtime.ContentTypeJSON
 	clientConfig.ContentConfig.NegotiatedSerializer = serializer.NegotiatedSerializerWrapper(runtime.SerializerInfo{Serializer: codec})
 
 	clientConfig.Wrap(x509metrics.NewDeprecatedCertificateRoundTripperWrapperConstructor(

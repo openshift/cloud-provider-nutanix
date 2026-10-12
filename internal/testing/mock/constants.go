@@ -23,6 +23,10 @@ const (
 	MockRegion       = "mock-region"
 	MockZone         = "mock-zone"
 
+	// MockPrismCentralVersion defaults to a release that predates the BIOS UUID
+	// lookup API, so resolveVM exercises the legacy try-BIOS-then-fall-back path.
+	MockPrismCentralVersion = "7.5"
+
 	MockDefaultRegion = "region"
 	MockDefaultZone   = "zone"
 
@@ -35,10 +39,16 @@ const (
 	MockVMNameDpOffload                  = "mock-vm-dp-offload"
 	MockVMNameSecondaryIPs               = "mock-vm-secondary-ips"
 	MockVMNameCustomProviderID           = "mock-vm-custom-provider-id"
+	MockVMNameMetro                      = "mock-vm-metro"
 
-	MockSecondaryIP1     = "2.2.2.2"
-	MockSecondaryIP2     = "3.3.3.3"
-	MockCustomProviderID = "custom-provider-uuid-1234"
+	MockSecondaryIP1       = "2.2.2.2"
+	MockSecondaryIP2       = "3.3.3.3"
+	MockCustomProviderID   = "custom-provider-uuid-1234"
+	MockMetroNodeGroupName = "mock-metro-group"
+	// MockFailureDomain is the full CAPI Machine.spec.failureDomain stamped by CAPX.
+	MockFailureDomain = "NutanixMetro/mock-metro"
+	// MockFailureDomainZone is MockFailureDomain after SanitizeK8sLabelValue (/ -> _).
+	MockFailureDomainZone = "NutanixMetro_mock-metro"
 
 	MockNodeNameVMNotExisting = "mock-node-no-vm-exists"
 	MockNodeNameNoSystemUUID  = "mock-node-no-system-uuid"
@@ -68,6 +78,7 @@ const (
 	MockVMDpOffloadUUID                  = "00000000-0000-0000-0000-000000000106"
 	MockVMSecondaryIPsUUID               = "00000000-0000-0000-0000-000000000107"
 	MockVMCustomProviderIDUUID           = "00000000-0000-0000-0000-000000000108"
+	MockVMMetroUUID                      = "00000000-0000-0000-0000-000000000109"
 	MockCategoryRegionUUID               = "00000000-0000-0000-0000-000000000200"
 	MockCategoryZoneUUID                 = "00000000-0000-0000-0000-000000000201"
 )

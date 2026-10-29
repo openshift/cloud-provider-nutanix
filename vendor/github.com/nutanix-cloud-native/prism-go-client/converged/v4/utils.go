@@ -3,6 +3,7 @@ package v4
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -93,7 +94,7 @@ func GetEtag(object any) string {
 	var reserved reflect.Value
 	if reflect.TypeOf(object).Kind() == reflect.Struct {
 		reserved = reflect.ValueOf(object).FieldByName("Reserved_")
-	} else if reflect.TypeOf(object).Kind() == reflect.Interface || reflect.TypeOf(object).Kind() == reflect.Ptr {
+	} else if reflect.TypeOf(object).Kind() == reflect.Interface || reflect.TypeOf(object).Kind() == reflect.Pointer {
 		reserved = reflect.ValueOf(object).Elem().FieldByName("Reserved_")
 	} else {
 		return ""
@@ -141,7 +142,7 @@ func CopyEtag(source, destination any) any {
 	destination = DropEtag(destination)
 	if reflect.TypeOf(source).Kind() == reflect.Struct {
 		reserved = reflect.ValueOf(source).FieldByName("Reserved_")
-	} else if reflect.TypeOf(source).Kind() == reflect.Interface || reflect.TypeOf(source).Kind() == reflect.Ptr {
+	} else if reflect.TypeOf(source).Kind() == reflect.Interface || reflect.TypeOf(source).Kind() == reflect.Pointer {
 		reserved = reflect.ValueOf(source).Elem().FieldByName("Reserved_")
 	} else {
 		return destination
@@ -193,7 +194,7 @@ type APIResponse interface {
 func CallAPI[R APIResponse, T any](response R, err error) (T, error) {
 	var zero, result T
 	if err != nil {
-		return zero, fmt.Errorf("API call failed: %w", err)
+		return zero, CategoriseFromOpenAPI(err)
 	}
 
 	data := response.GetData()
@@ -211,51 +212,62 @@ func CallAPI[R APIResponse, T any](response R, err error) (T, error) {
 
 // GetMetadataTotalResults gets the total results from the API response metadata
 // It returns the total results if the metadata is valid, otherwise it returns an error
-func GetMetadataTotalResults[R APIResponse](response R) (int, error) {
-	hasMetadataField := reflect.ValueOf(response).Elem().FieldByName("Metadata")
-	if !hasMetadataField.IsValid() {
-		return 0, fmt.Errorf("response does not have Metadata field")
-	}
-	metadata := hasMetadataField.Interface()
-	if reflect.ValueOf(metadata).IsNil() {
-		return 0, fmt.Errorf("no metadata found in response")
-	}
+func GetMetadataTotalResults[R APIResponse](response R) int {
+    // Do not return an error if any of the fields are not found as these are optional fields.
+    hasMetadataField := reflect.ValueOf(response).Elem().FieldByName("Metadata")
+    if !hasMetadataField.IsValid() {
+        return 0
+    }
+    metadata := hasMetadataField.Interface()
+    if reflect.ValueOf(metadata).IsNil() {
+        return 0
+    }
+    totalCountField := reflect.ValueOf(metadata).Elem().FieldByName("TotalAvailableResults")
+    if !totalCountField.IsValid() || totalCountField.IsNil() {
+        return 0
+    }
+    totalCount := totalCountField.Interface().(*int)
+    if totalCount == nil || *totalCount < 0 {
+        return 0
+    }
 
-	totalCountField := reflect.ValueOf(metadata).Elem().FieldByName("TotalAvailableResults")
-	if !totalCountField.IsValid() || totalCountField.IsNil() {
-		return 0, fmt.Errorf("metadata does not have TotalAvailableResults field")
-	}
-	totalCount := totalCountField.Interface().(*int)
-	if totalCount == nil || *totalCount < 0 {
-		return 0, fmt.Errorf("invalid total count: %v", totalCount)
-	}
-	return int(*totalCount), nil
+    return int(*totalCount)
 }
 
 // CallListAPI calls the list API and returns the result
 // It returns the result if the API call is successful, otherwise it returns an error
 func CallListAPI[R APIResponse, T any](response R, err error) ([]T, int, error) {
-	var zero []T
-	if err != nil {
-		return zero, 0, fmt.Errorf("API call failed: %w", err)
-	}
+    var zero []T
+    if err != nil {
+        return zero, 0, CategoriseFromOpenAPI(err)
+    }
 
-	totalCount, err := GetMetadataTotalResults(response)
-	if err != nil {
-		return zero, 0, fmt.Errorf("failed to get total results from response metadata: %w", err)
-	}
+    totalCount := GetMetadataTotalResults(response)
 
-	data := response.GetData()
-	if data == nil {
-		return zero, totalCount, nil
-	}
+    data := response.GetData()
+    if data == nil {
+        return zero, totalCount, nil
+    }
 
-	result, ok := data.([]T)
-	if !ok {
-		return zero, 0, fmt.Errorf("unexpected type for API response data: %T", data)
-	}
+    result, ok := data.([]T)
+    if !ok {
+        // List responses can come back as either the full entity type or a
+        // *Projection type. Projections are used when the API supports $expand
+        // (for example AuthorizationPolicyProjection can include the related Role).
+        // We must not convert a non-empty projection into []T, because that would
+        // drop the nested expanded data the caller asked for.
+        //
+        // Empty lists are a special case: the generated SDK sometimes labels an
+        // empty result as a projection type even when the caller expected the
+        // full entity type. There is nothing in an empty list to lose, so treat
+        // that as "no results" and return an empty []T.
+        if v := reflect.ValueOf(data); v.Kind() == reflect.Slice && v.Len() == 0 {
+            return zero, totalCount, nil
+        }
+        return zero, 0, fmt.Errorf("unexpected type for API response data: %T", data)
+    }
 
-	return result, totalCount, nil
+    return result, totalCount, nil
 }
 
 // GetEntityAndEtag gets the entity and etag from the API response
@@ -264,7 +276,7 @@ func GetEntityAndEtag[T any](entity T, err error) (T, map[string]any, error) {
 	var zero T
 
 	if err != nil {
-		return zero, nil, fmt.Errorf("failed to get entity: %w", err)
+		return zero, nil, CategoriseFromOpenAPI(err)
 	}
 
 	etag := GetEtag(entity)
@@ -277,6 +289,48 @@ func GetEntityAndEtag[T any](entity T, err error) (T, map[string]any, error) {
 	}
 
 	return entity, args, nil
+}
+
+// requestIDHeader is the header V4 APIs use to make write operations idempotent.
+const requestIDHeader = "NTNX-Request-Id"
+
+// headersContextKey is an unexported context key type to avoid collisions.
+type headersContextKey struct{}
+
+func withHeader(ctx context.Context, key, value string) context.Context {
+	headers := maps.Clone(headersFromContext(ctx))
+	if headers == nil {
+		headers = make(map[string]string, 1)
+	}
+	headers[key] = value
+	return context.WithValue(ctx, headersContextKey{}, headers)
+}
+
+// WithRequestID returns a copy of ctx carrying the given idempotency request id.
+// Currently scoped for Create() operations. Callers that do not set it are unaffected 
+// and no header is sent.
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	return withHeader(ctx, requestIDHeader, requestID)
+}
+
+// headersFromContext returns the headers set via withHeader, or nil if none.
+func headersFromContext(ctx context.Context) map[string]string {
+	headers, _ := ctx.Value(headersContextKey{}).(map[string]string)
+	return headers
+}
+
+// headerArgs builds the SDK args (header map) from headers set on the context.
+func headerArgs(ctx context.Context) map[string]any {
+	headers := headersFromContext(ctx)
+	if len(headers) == 0 {
+		return nil
+	}
+
+	args := make(map[string]any, len(headers))
+	for k, v := range headers {
+		args[k] = ptr.To(v)
+	}
+	return args
 }
 
 // OptsToV4ODataParams converts the OData options to V4 OData parameters
@@ -336,15 +390,37 @@ func GenericListEntities[R APIResponse, T any](apiCall func(reqParams *V4ODataPa
 		for len(result) < totalCount {
 			page++
 			reqParams.Page = ptr.To(page)
-			moreItems, _, err := CallListAPI[R, T](apiCall(reqParams))
+			moreItems, latestTotalCount, err := CallListAPI[R, T](apiCall(reqParams))
 			if err != nil {
 				return nil, fmt.Errorf("failed to list all %s on page %d: %w", entitiesName, *reqParams.Page, err)
 			}
+			// Guard against an unbounded loop. metadata.TotalAvailableResults
+			// and the page data are only eventually consistent, so the data set
+			// can shrink between requests (entities being deleted) and the count
+			// can lag behind it. If we ever get a page with no items, the server
+			// has nothing more to return, so stop instead of paging forever past
+			// the last page of data.
+			if len(moreItems) == 0 {
+				break
+			}
 			result = append(result, moreItems...)
+			// Re-read the total from each page so that entities added while we
+			// paginate are still collected, rather than stopping at the (now
+			// stale) total observed on the first page.
+			totalCount = latestTotalCount
 		}
 	}
 
 	return result, nil
+}
+
+// ErrorOnlyIterator returns an iterator that yields exactly one (zero, err) so the first iteration gets the error.
+func ErrorOnlyIterator[T any](err error) converged.Iterator[T] {
+	var zero T
+	seq := func(yield func(T, error) bool) {
+		yield(zero, err)
+	}
+	return converged.Iterator[T](seq)
 }
 
 // GenericNewIterator creates a new iterator for the given API call and options

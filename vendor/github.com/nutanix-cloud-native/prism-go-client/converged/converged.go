@@ -19,31 +19,65 @@ type Client[
 	Cluster,
 	VirtualGpuProfile,
 	PhysicalGpuProfile,
+	AHVVirtualGpuProfile,
+	AHVPhysicalGpuProfile,
 	Host,
 	Category,
 	Image,
+	ImageFile,
 	StorageContainer,
 	Subnet,
 	SubnetTaskReference,
 	VM,
+	NIC,
+	VMDisk,
 	Task,
 	AppMessage,
 	VolumeGroup,
 	VmAttachment,
+	VMProfile,
+	DeployParams,
 	DomainManagerEntity,
-	User any] struct {
-	AntiAffinityPolicies AntiAffinityPolicies[AntiAffinityPolicy]
-	Clusters             Clusters[Cluster, VirtualGpuProfile, PhysicalGpuProfile, Host]
-	Categories           Categories[Category]
-	Images               Images[Image]
-	StorageContainers    StorageContainers[StorageContainer]
-	Subnets              Subnets[Subnet, SubnetTaskReference]
-	VMs                  VMs[VM]
-	Tasks                Tasks[Task, AppMessage]
-	VolumeGroups         VolumeGroups[VolumeGroup, VmAttachment]
-	DomainManager        DomainManager[DomainManagerEntity]
-	Users                Users[User]
-	// Additional service interfaces can be added here as needed.
+	User,
+	Role,
+	RoleMembership,
+	RoleMembershipProjection,
+	AuthorizationPolicy,
+	AuthorizationPolicyProjection,
+	Operation,
+	Template,
+	TemplateDeployParams,
+	Ova,
+	OvaFile,
+	ProtectionPolicy,
+	RecoveryPlan,
+	Project,
+	ResourceGroup,
+	Disk,
+	Alert any] struct {
+	AntiAffinityPolicies  AntiAffinityPolicies[AntiAffinityPolicy]
+	Clusters              Clusters[Cluster, VirtualGpuProfile, PhysicalGpuProfile, AHVVirtualGpuProfile, AHVPhysicalGpuProfile, Host]
+	Categories            Categories[Category]
+	Images                Images[Image, ImageFile]
+	StorageContainers     StorageContainers[StorageContainer]
+	Subnets               Subnets[Subnet, SubnetTaskReference]
+	VMs                   VMs[VM, NIC, VMDisk]
+	Tasks                 Tasks[Task, AppMessage]
+	VolumeGroups          VolumeGroups[VolumeGroup, VmAttachment]
+	VMProfiles            VMProfiles[VMProfile, VM, DeployParams]
+	DomainManager         DomainManager[DomainManagerEntity]
+	Users                 Users[User]
+	Roles                 Roles[Role]
+	RoleMemberships       RoleMemberships[RoleMembership, RoleMembershipProjection]
+	AuthorizationPolicies AuthorizationPolicies[AuthorizationPolicy, AuthorizationPolicyProjection]
+	Operations            Operations[Operation]
+	Templates             Templates[Template, VM, TemplateDeployParams]
+	Ovas                  Ovas[Ova, OvaFile]
+	DataPolicies          DataPolicies[ProtectionPolicy, RecoveryPlan]
+	Projects              Projects[Project]
+	ResourceGroups        ResourceGroups[ResourceGroup]
+	Disks                 Disks[Disk]
+	Alerts                Alerts[Alert]
 }
 
 // Getter is the interface for Get operations.
@@ -194,6 +228,14 @@ type Operation[T any] interface {
 	UUID() string
 	Status() TaskStatus
 	Errors() []error
+}
+
+// VMConsoleToken holds the VNC console access credentials returned by
+// GenerateConsoleToken. Token is a JWT used for authentication and WsUri is the
+// relative WebSocket path to connect to the VM's VNC console.
+type VMConsoleToken struct {
+	Token string
+	WsUri string
 }
 
 // NoEntity is a placeholder for cases where no entity is returned (e.g. delete operations).

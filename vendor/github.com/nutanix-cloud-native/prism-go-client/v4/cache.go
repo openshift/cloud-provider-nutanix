@@ -85,22 +85,18 @@ func (c *ClientCache) GetOrCreate(cachedClientParams types.CachedClientParams, o
 	}
 
 	credentials := prismgoclient.Credentials{
-		URL:         managementEndpoint.Address.Host,
-		Endpoint:    managementEndpoint.Address.Host,
-		Insecure:    managementEndpoint.Insecure,
-		Username:    managementEndpoint.Username,
-		Password:    managementEndpoint.Password,
-		SessionAuth: c.useSessionAuth,
-	}
-
-	// TODO(sid): v4 SDK doesn't have trust bundle as an input. Until we have a better solution, we will
-	// set Insecure to true if trust bundle is provided to avoid breaking existing consumers of v3 SDK.
-	if managementEndpoint.AdditionalTrustBundle != "" {
-		credentials.Insecure = true
+		URL:                   managementEndpoint.Address.Host,
+		Endpoint:              managementEndpoint.Address.Host,
+		Insecure:              managementEndpoint.Insecure,
+		Username:              managementEndpoint.Username,
+		Password:              managementEndpoint.Password,
+		APIKey:                managementEndpoint.APIKey,
+		SessionAuth:           c.useSessionAuth,
+		AdditionalTrustBundle: managementEndpoint.AdditionalTrustBundle,
 	}
 
 	setDefaultsForCredentials(&credentials)
-	if err := validateCredentials(credentials); err != nil {
+	if err := validateCredentials(credentials, cachedClientParams.Key()); err != nil {
 		return nil, fmt.Errorf("failed to validate credentials for cachedClientParams with key %s: %w", cachedClientParams.Key(), err)
 	}
 
@@ -149,24 +145,13 @@ func validateManagementEndpoint(endpoint types.ManagementEndpoint, key string) e
 		return fmt.Errorf("management endpoint address host is empty for cachedClientParams with key %s", key)
 	}
 
-	if endpoint.Username == "" {
-		return fmt.Errorf("API credentials username is empty for cachedClientParams with key %s", key)
-	}
-
-	if endpoint.Password == "" {
-		return fmt.Errorf("API credentials password is empty for cachedClientParams with key %s", key)
-	}
-
 	return nil
 }
 
-func validateCredentials(credentials prismgoclient.Credentials) error {
-	if credentials.Username == "" {
-		return types.ErrorPrismUsernameNotSet
-	}
-
-	if credentials.Password == "" {
-		return types.ErrorPrismPasswordNotSet
+func validateCredentials(credentials prismgoclient.Credentials, key string) error {
+	if credentials.APIKey == "" && (credentials.Username == "" || credentials.Password == "") {
+		return fmt.Errorf("API credentials(either a username and password, or an API key) is required for authentication"+
+			" in cachedClientParams with key %s", key)
 	}
 
 	return nil

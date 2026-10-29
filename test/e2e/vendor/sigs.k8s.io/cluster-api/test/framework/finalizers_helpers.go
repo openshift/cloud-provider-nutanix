@@ -22,7 +22,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -35,7 +35,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	clusterctlcluster "sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
-	infraexpv1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/exp/api/v1beta2"
 	"sigs.k8s.io/cluster-api/util/patch"
 )
 
@@ -68,11 +67,11 @@ var ExpFinalizersAssertion = map[string]func(types.NamespacedName) []string{
 	machinePoolKind:        func(_ types.NamespacedName) []string { return []string{clusterv1.MachinePoolFinalizer} },
 }
 
-// DockerInfraFinalizersAssertion maps docker infrastructure resource types to their expected finalizers.
-var DockerInfraFinalizersAssertion = map[string]func(types.NamespacedName) []string{
-	dockerMachineKind:     func(_ types.NamespacedName) []string { return []string{infrav1.MachineFinalizer} },
-	dockerClusterKind:     func(_ types.NamespacedName) []string { return []string{infrav1.ClusterFinalizer} },
-	dockerMachinePoolKind: func(_ types.NamespacedName) []string { return []string{infraexpv1.MachinePoolFinalizer} },
+// DevInfraFinalizersAssertion maps dev infrastructure resource types to their expected finalizers.
+var DevInfraFinalizersAssertion = map[string]func(types.NamespacedName) []string{
+	devMachineKind:     func(_ types.NamespacedName) []string { return []string{infrav1.MachineFinalizer} },
+	devClusterKind:     func(_ types.NamespacedName) []string { return []string{infrav1.ClusterFinalizer} },
+	devMachinePoolKind: func(_ types.NamespacedName) []string { return []string{infrav1.MachinePoolFinalizer} },
 }
 
 // KubeadmControlPlaneFinalizersAssertion maps Kubeadm resource types to their expected finalizers.
@@ -144,7 +143,7 @@ func checkObjectsWithFinalizers(ctx context.Context, proxy ClusterProxy, namespa
 		obj.SetKind(node.Object.Kind)
 		err = proxy.GetClient().Get(ctx, nodeNamespacedName, obj)
 		if err != nil {
-			return errors.Wrapf(err, "failed to get object %s, %s", node.Object.Kind, klog.KRef(node.Object.Namespace, node.Object.Name))
+			return pkgerrors.Wrapf(err, "failed to get object %s, %s", node.Object.Kind, klog.KRef(node.Object.Namespace, node.Object.Name))
 		}
 
 		// assert if the expected finalizers are set on the resource (including also checking if there are unexpected finalizers)

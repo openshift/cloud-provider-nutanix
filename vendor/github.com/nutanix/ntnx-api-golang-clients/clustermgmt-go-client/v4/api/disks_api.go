@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/client"
 	import1 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/config"
-	import3 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/stats"
-	import4 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/common/v1/stats"
+	import12 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/request/disks"
+	import8 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/stats"
+	import9 "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/common/v1/stats"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +15,12 @@ import (
 )
 
 type DisksApi struct {
+	ApiClient     *client.ApiClient
+	headersToSkip map[string]bool
+	ServiceClient *DisksServiceApi
+}
+
+type DisksServiceApi struct {
 	ApiClient     *client.ApiClient
 	headersToSkip map[string]bool
 }
@@ -32,29 +40,60 @@ func NewDisksApi(apiClient *client.ApiClient) *DisksApi {
 		a.headersToSkip[header] = true
 	}
 
+	a.ServiceClient = NewDisksServiceApi(a.ApiClient)
+
+	return a
+}
+
+func NewDisksServiceApi(apiClient *client.ApiClient) *DisksServiceApi {
+	if apiClient == nil {
+		apiClient = client.NewApiClient()
+	}
+
+	a := &DisksServiceApi{
+		ApiClient: apiClient,
+	}
+
+	headers := []string{"authorization", "cookie", "host", "user-agent"}
+	a.headersToSkip = make(map[string]bool)
+	for _, header := range headers {
+		a.headersToSkip[header] = true
+	}
+
 	return a
 }
 
 // Repartitions and adds the Disk to a cluster, or adds an old Disk again to a cluster that is marked for removal.
 func (api *DisksApi) AddDisk(extId *string, body *import1.DiskAdditionSpec, args ...map[string]interface{}) (*import1.AddDiskApiResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.AddDisk(context.Background(), &import12.AddDiskRequest{
+		ExtId: extId,
+		Body:  body,
+	}, args...)
+}
+
+// Repartitions and adds the Disk to a cluster, or adds an old Disk again to a cluster that is marked for removal.
+func (api *DisksServiceApi) AddDisk(ctx context.Context, request *import12.AddDiskRequest, args ...map[string]interface{}) (*import1.AddDiskApiResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/config/clusters/{extId}/$actions/add-disk"
+	uri := "/api/clustermgmt/v4.3/config/clusters/{extId}/$actions/add-disk"
 
 	// verify the required parameter 'extId' is set
-	if nil == extId {
+	if nil == request.ExtId {
 		return nil, client.ReportError("extId is required and must be specified")
 	}
 	// verify the required parameter 'body' is set
-	if nil == body {
+	if nil == request.Body {
 		return nil, client.ReportError("body is required and must be specified")
 	}
 
 	// Path Params
-	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*extId, "")), -1)
+	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*request.ExtId, "")), -1)
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
 	formParams := url.Values{}
@@ -77,34 +116,50 @@ func (api *DisksApi) AddDisk(extId *string, body *import1.DiskAdditionSpec, args
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodPost, body, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodPost, request.Body, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
+	// Response is already []byte (JSON content)
 	unmarshalledResp := new(import1.AddDiskApiResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }
 
 // Marks Disk identified by external identifier for removal.
 func (api *DisksApi) DeleteDiskById(extId *string, args ...map[string]interface{}) (*import1.DeleteDiskApiResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.DeleteDiskById(context.Background(), &import12.DeleteDiskByIdRequest{
+		ExtId: extId,
+	}, args...)
+}
+
+// Marks Disk identified by external identifier for removal.
+func (api *DisksServiceApi) DeleteDiskById(ctx context.Context, request *import12.DeleteDiskByIdRequest, args ...map[string]interface{}) (*import1.DeleteDiskApiResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/config/disks/{extId}"
+	uri := "/api/clustermgmt/v4.3/config/disks/{extId}"
 
 	// verify the required parameter 'extId' is set
-	if nil == extId {
+	if nil == request.ExtId {
 		return nil, client.ReportError("extId is required and must be specified")
 	}
 
 	// Path Params
-	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*extId, "")), -1)
+	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*request.ExtId, "")), -1)
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
 	formParams := url.Values{}
@@ -127,34 +182,50 @@ func (api *DisksApi) DeleteDiskById(extId *string, args ...map[string]interface{
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodDelete, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodDelete, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
+	// Response is already []byte (JSON content)
 	unmarshalledResp := new(import1.DeleteDiskApiResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }
 
 // Fetch the details of the Disk identified by external identifier.
 func (api *DisksApi) GetDiskById(extId *string, args ...map[string]interface{}) (*import1.GetDiskApiResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.GetDiskById(context.Background(), &import12.GetDiskByIdRequest{
+		ExtId: extId,
+	}, args...)
+}
+
+// Fetch the details of the Disk identified by external identifier.
+func (api *DisksServiceApi) GetDiskById(ctx context.Context, request *import12.GetDiskByIdRequest, args ...map[string]interface{}) (*import1.GetDiskApiResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/config/disks/{extId}"
+	uri := "/api/clustermgmt/v4.3/config/disks/{extId}"
 
 	// verify the required parameter 'extId' is set
-	if nil == extId {
+	if nil == request.ExtId {
 		return nil, client.ReportError("extId is required and must be specified")
 	}
 
 	// Path Params
-	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*extId, "")), -1)
+	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*request.ExtId, "")), -1)
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
 	formParams := url.Values{}
@@ -177,42 +248,62 @@ func (api *DisksApi) GetDiskById(extId *string, args ...map[string]interface{}) 
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
+	// Response is already []byte (JSON content)
 	unmarshalledResp := new(import1.GetDiskApiResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }
 
 // Fetch the stats information of the Disk identified by external identifier.
-func (api *DisksApi) GetDiskStats(extId *string, startTime_ *time.Time, endTime_ *time.Time, samplingInterval_ *int, statType_ *import4.DownSamplingOperator, args ...map[string]interface{}) (*import3.GetDiskStatsApiResponse, error) {
+func (api *DisksApi) GetDiskStats(extId *string, startTime_ *time.Time, endTime_ *time.Time, samplingInterval_ *int, statType_ *import9.DownSamplingOperator, args ...map[string]interface{}) (*import8.GetDiskStatsApiResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.GetDiskStats(context.Background(), &import12.GetDiskStatsRequest{
+		ExtId:             extId,
+		StartTime_:        startTime_,
+		EndTime_:          endTime_,
+		SamplingInterval_: samplingInterval_,
+		StatType_:         statType_,
+	}, args...)
+}
+
+// Fetch the stats information of the Disk identified by external identifier.
+func (api *DisksServiceApi) GetDiskStats(ctx context.Context, request *import12.GetDiskStatsRequest, args ...map[string]interface{}) (*import8.GetDiskStatsApiResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/stats/disks/{extId}"
+	uri := "/api/clustermgmt/v4.3/stats/disks/{extId}"
 
 	// verify the required parameter 'extId' is set
-	if nil == extId {
+	if nil == request.ExtId {
 		return nil, client.ReportError("extId is required and must be specified")
 	}
 	// verify the required parameter 'startTime_' is set
-	if nil == startTime_ {
+	if nil == request.StartTime_ {
 		return nil, client.ReportError("startTime_ is required and must be specified")
 	}
 	// verify the required parameter 'endTime_' is set
-	if nil == endTime_ {
+	if nil == request.EndTime_ {
 		return nil, client.ReportError("endTime_ is required and must be specified")
 	}
 
 	// Path Params
-	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*extId, "")), -1)
+	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*request.ExtId, "")), -1)
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
 	formParams := url.Values{}
@@ -224,13 +315,13 @@ func (api *DisksApi) GetDiskStats(extId *string, startTime_ *time.Time, endTime_
 	accepts := []string{"application/json"}
 
 	// Query Params
-	queryParams.Add("$startTime", client.ParameterToString(*startTime_, ""))
-	queryParams.Add("$endTime", client.ParameterToString(*endTime_, ""))
-	if samplingInterval_ != nil {
-		queryParams.Add("$samplingInterval", client.ParameterToString(*samplingInterval_, ""))
+	queryParams.Add("$startTime", client.ParameterToString(*request.StartTime_, ""))
+	queryParams.Add("$endTime", client.ParameterToString(*request.EndTime_, ""))
+	if request.SamplingInterval_ != nil {
+		queryParams.Add("$samplingInterval", client.ParameterToString(*request.SamplingInterval_, ""))
 	}
-	if statType_ != nil {
-		statType_QueryParamEnumVal := statType_.GetName()
+	if request.StatType_ != nil {
+		statType_QueryParamEnumVal := request.StatType_.GetName()
 		queryParams.Add("$statType", client.ParameterToString(statType_QueryParamEnumVal, ""))
 	}
 	// Headers provided explicitly on operation takes precedence
@@ -245,26 +336,47 @@ func (api *DisksApi) GetDiskStats(extId *string, startTime_ *time.Time, endTime_
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
-	unmarshalledResp := new(import3.GetDiskStatsApiResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	// Response is already []byte (JSON content)
+	unmarshalledResp := new(import8.GetDiskStatsApiResponse)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }
 
 // Fetches Disk details from all clusters registered with Prism Central.
 func (api *DisksApi) ListDisks(page_ *int, limit_ *int, filter_ *string, orderby_ *string, apply_ *string, select_ *string, args ...map[string]interface{}) (*import1.ListDisksApiResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.ListDisks(context.Background(), &import12.ListDisksRequest{
+		Page_:    page_,
+		Limit_:   limit_,
+		Filter_:  filter_,
+		Orderby_: orderby_,
+		Apply_:   apply_,
+		Select_:  select_,
+	}, args...)
+}
+
+// Fetches Disk details from all clusters registered with Prism Central.
+func (api *DisksServiceApi) ListDisks(ctx context.Context, request *import12.ListDisksRequest, args ...map[string]interface{}) (*import1.ListDisksApiResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/config/disks"
+	uri := "/api/clustermgmt/v4.3/config/disks"
 
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
@@ -277,23 +389,23 @@ func (api *DisksApi) ListDisks(page_ *int, limit_ *int, filter_ *string, orderby
 	accepts := []string{"application/json"}
 
 	// Query Params
-	if page_ != nil {
-		queryParams.Add("$page", client.ParameterToString(*page_, ""))
+	if request.Page_ != nil {
+		queryParams.Add("$page", client.ParameterToString(*request.Page_, ""))
 	}
-	if limit_ != nil {
-		queryParams.Add("$limit", client.ParameterToString(*limit_, ""))
+	if request.Limit_ != nil {
+		queryParams.Add("$limit", client.ParameterToString(*request.Limit_, ""))
 	}
-	if filter_ != nil {
-		queryParams.Add("$filter", client.ParameterToString(*filter_, ""))
+	if request.Filter_ != nil {
+		queryParams.Add("$filter", client.ParameterToString(*request.Filter_, ""))
 	}
-	if orderby_ != nil {
-		queryParams.Add("$orderby", client.ParameterToString(*orderby_, ""))
+	if request.Orderby_ != nil {
+		queryParams.Add("$orderby", client.ParameterToString(*request.Orderby_, ""))
 	}
-	if apply_ != nil {
-		queryParams.Add("$apply", client.ParameterToString(*apply_, ""))
+	if request.Apply_ != nil {
+		queryParams.Add("$apply", client.ParameterToString(*request.Apply_, ""))
 	}
-	if select_ != nil {
-		queryParams.Add("$select", client.ParameterToString(*select_, ""))
+	if request.Select_ != nil {
+		queryParams.Add("$select", client.ParameterToString(*request.Select_, ""))
 	}
 	// Headers provided explicitly on operation takes precedence
 	for headerKey, value := range argMap {
@@ -307,38 +419,55 @@ func (api *DisksApi) ListDisks(page_ *int, limit_ *int, filter_ *string, orderby
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodGet, nil, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
+	// Response is already []byte (JSON content)
 	unmarshalledResp := new(import1.ListDisksApiResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }
 
 // Updates the LED state of a Disk to on or off.
 func (api *DisksApi) UpdateDiskLEDState(extId *string, body *import1.LEDStateUpdationSpec, args ...map[string]interface{}) (*import1.UpdateDiskLEDStateTaskResponse, error) {
+	if api.ServiceClient == nil {
+		api.ServiceClient = NewDisksServiceApi(api.ApiClient)
+	}
+	return api.ServiceClient.UpdateDiskLEDState(context.Background(), &import12.UpdateDiskLEDStateRequest{
+		ExtId: extId,
+		Body:  body,
+	}, args...)
+}
+
+// Updates the LED state of a Disk to on or off.
+func (api *DisksServiceApi) UpdateDiskLEDState(ctx context.Context, request *import12.UpdateDiskLEDStateRequest, args ...map[string]interface{}) (*import1.UpdateDiskLEDStateTaskResponse, error) {
 	argMap := make(map[string]interface{})
 	if len(args) > 0 {
 		argMap = args[0]
 	}
 
-	uri := "/api/clustermgmt/v4.2/config/disks/{extId}/$actions/update-led-state"
+	uri := "/api/clustermgmt/v4.3/config/disks/{extId}/$actions/update-led-state"
 
 	// verify the required parameter 'extId' is set
-	if nil == extId {
+	if nil == request.ExtId {
 		return nil, client.ReportError("extId is required and must be specified")
 	}
 	// verify the required parameter 'body' is set
-	if nil == body {
+	if nil == request.Body {
 		return nil, client.ReportError("body is required and must be specified")
 	}
 
 	// Path Params
-	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*extId, "")), -1)
+	uri = strings.Replace(uri, "{"+"extId"+"}", url.PathEscape(client.ParameterToString(*request.ExtId, "")), -1)
 	headerParams := make(map[string]string)
 	queryParams := url.Values{}
 	formParams := url.Values{}
@@ -361,14 +490,20 @@ func (api *DisksApi) UpdateDiskLEDState(extId *string, body *import1.LEDStateUpd
 		}
 	}
 
-	authNames := []string{"basicAuthScheme"}
+	authNames := []string{"apiKeyAuthScheme", "basicAuthScheme"}
 
-	apiClientResponse, err := api.ApiClient.CallApi(&uri, http.MethodPost, body, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
+	apiClientResponse, err := api.ApiClient.CallApiWithContext(ctx, &uri, http.MethodPost, request.Body, queryParams, headerParams, formParams, accepts, contentTypes, authNames)
 	if nil != err || nil == apiClientResponse {
 		return nil, err
 	}
+	if _, ok := apiClientResponse.(*client.EmptyResponse); ok {
+		return nil, nil
+	}
 
+	// Response is already []byte (JSON content)
 	unmarshalledResp := new(import1.UpdateDiskLEDStateTaskResponse)
-	json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp)
+	if err = json.Unmarshal(apiClientResponse.([]byte), &unmarshalledResp); err != nil {
+		return nil, err
+	}
 	return unmarshalledResp, err
 }

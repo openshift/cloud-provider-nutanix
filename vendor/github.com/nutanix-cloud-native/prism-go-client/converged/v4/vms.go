@@ -1,0 +1,916 @@
+package v4
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+
+	"github.com/nutanix-cloud-native/prism-go-client/converged"
+	v4prismGoClient "github.com/nutanix-cloud-native/prism-go-client/v4"
+	prismModels "github.com/nutanix/ntnx-api-golang-clients/prism-go-client/v4/models/prism/v4/config"
+	taskRequest "github.com/nutanix/ntnx-api-golang-clients/prism-go-client/v4/models/prism/v4/request/tasks"
+	vmmConfig "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/prism/v4/config"
+	vmmModels "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/vmm/v4/ahv/config"
+	vmRequest "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/vmm/v4/request/vm"
+)
+
+const (
+	consoleTokenKey = "VmConsoleToken"
+	consoleWsUriKey = "WsUri"
+)
+
+// VMsService provides default "not implemented" implementation for all VMs interface methods.
+// TODO: Migrate to VmServiceApi methods which support project params in a future PR.
+type VMsService struct {
+	client       *v4prismGoClient.Client
+	entitiesName string
+}
+
+// NewVMsService creates a new VMsService instance.
+func NewVMsService(client *v4prismGoClient.Client) *VMsService {
+	return &VMsService{
+		client:       client,
+		entitiesName: "VM",
+	}
+}
+
+// Get returns the VM for the given UUID.
+func (s *VMsService) Get(ctx context.Context, uuid string) (*vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	return GenericGetEntity[*vmmModels.GetVmApiResponse, vmmModels.Vm](
+		func() (*vmmModels.GetVmApiResponse, error) {
+			return s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+				&vmRequest.GetVmByIdRequest{
+					ExtId: &uuid,
+				},
+				nil,
+			)
+		},
+		s.entitiesName,
+	)
+}
+
+// List returns a list of VMs.
+// If no page and limit are provided, the API will return all VMs.
+func (s *VMsService) List(ctx context.Context, opts ...converged.ODataOption) ([]vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	myParams, err := OptsToV4ODataParams(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert options to V4ODataParams: %w", err)
+	}
+
+	if myParams.Expand != nil || myParams.Apply != nil {
+		return nil, fmt.Errorf("expand and apply are not supported for listing VMs")
+	}
+
+	return GenericListEntities[*vmmModels.ListVmsApiResponse, vmmModels.Vm](
+		func(reqParams *V4ODataParams) (*vmmModels.ListVmsApiResponse, error) {
+			return s.client.VmApiInstance.ServiceClient.ListVms(ctx,
+				&vmRequest.ListVmsRequest{
+					Page_:    reqParams.Page,
+					Limit_:   reqParams.Limit,
+					Filter_:  reqParams.Filter,
+					Orderby_: reqParams.OrderBy,
+					Select_:  reqParams.Select,
+				},
+			)
+		},
+		opts,
+		s.entitiesName,
+	)
+}
+
+// NewIterator returns an iterator for listing VMs.
+func (s *VMsService) NewIterator(ctx context.Context, opts ...converged.ODataOption) converged.Iterator[vmmModels.Vm] {
+	if s.client == nil {
+		return nil
+	}
+	return GenericNewIterator[*vmmModels.ListVmsApiResponse, vmmModels.Vm](
+		ctx,
+		func(ctx context.Context, reqParams *V4ODataParams) (*vmmModels.ListVmsApiResponse, error) {
+			return s.client.VmApiInstance.ServiceClient.ListVms(ctx,
+				&vmRequest.ListVmsRequest{
+					Page_:    reqParams.Page,
+					Limit_:   reqParams.Limit,
+					Filter_:  reqParams.Filter,
+					Orderby_: reqParams.OrderBy,
+					Select_:  reqParams.Select,
+				},
+			)
+		},
+		opts,
+		s.entitiesName,
+	)
+}
+
+// Create creates a new VM.
+func (s *VMsService) Create(ctx context.Context, vm *vmmModels.Vm) (*vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	operation, err := s.CreateAsync(ctx, vm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	result, err := operation.Wait(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to create VM: operation completed but no VM returned")
+	}
+
+	return result[0], nil
+}
+
+// Update updates an existing VM.
+func (s *VMsService) Update(ctx context.Context, uuid string, entity *vmmModels.Vm) (*vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	operation, err := s.UpdateAsync(ctx, uuid, entity)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update VM: %w", err)
+	}
+
+	result, err := operation.Wait(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update VM: %w", err)
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to update VM: operation completed but no VM returned")
+	}
+
+	return result[0], nil
+}
+
+// Delete deletes an existing VM.
+func (s *VMsService) Delete(ctx context.Context, uuid string) error {
+	if s.client == nil {
+		return errors.New("client is not initialized")
+	}
+	operation, err := s.DeleteAsync(ctx, uuid)
+	if err != nil {
+		return fmt.Errorf("failed to delete VM: %w", err)
+	}
+
+	_, err = operation.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete VM: %w", err)
+	}
+
+	return nil
+}
+
+// CreateAsync creates a new VM asynchronously.
+func (s *VMsService) CreateAsync(ctx context.Context, vm *vmmModels.Vm) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	taskRef, err := CallAPI[*vmmModels.CreateVmApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.CreateVm(ctx,
+			&vmRequest.CreateVmRequest{
+				Body: vm,
+			},
+			headerArgs(ctx),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for created VM")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// UpdateAsync updates an existing VM asynchronously.
+func (s *VMsService) UpdateAsync(ctx context.Context, uuid string, vm *vmmModels.Vm) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	currentVM, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for update: %w", err)
+	}
+
+	vm = CopyEtag(currentVM, vm).(*vmmModels.Vm)
+
+	taskRef, err := CallAPI[*vmmModels.UpdateVmApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.UpdateVmById(ctx,
+			&vmRequest.UpdateVmByIdRequest{
+				ExtId: &uuid,
+				Body:  vm,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for updated VM")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// DeleteAsync deletes an existing VM asynchronously.
+func (s *VMsService) DeleteAsync(ctx context.Context, uuid string) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	// Get the VM first to retrieve its eTag
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for deletion: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.DeleteVmApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.DeleteVmById(ctx,
+			&vmRequest.DeleteVmByIdRequest{
+				ExtId: &uuid,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for deleted VM")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		func(ctx context.Context, uuid string) (*converged.NoEntity, error) {
+			return converged.NoEntityGetter(ctx, uuid)
+		},
+	), nil
+}
+
+// PowerOnVM powers on the VM with the given UUID.
+func (s *VMsService) PowerOnVM(ctx context.Context, uuid string) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for power on: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.PowerOnVmApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.PowerOnVm(ctx,
+			&vmRequest.PowerOnVmRequest{
+				ExtId: &uuid,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to power on VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for powered on VM")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// PowerOffVM powers off the VM with the given UUID.
+func (s *VMsService) PowerOffVM(ctx context.Context, uuid string) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for power off: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.PowerOffVmApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.PowerOffVm(ctx,
+			&vmRequest.PowerOffVmRequest{
+				ExtId: &uuid,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to power off VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for powered off VM")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// AddVmCustomAttributes adds custom attributes to the VM with the given UUID.
+func (s *VMsService) AddVmCustomAttributes(ctx context.Context, uuid string, customAttributes []string) (*vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	operation, err := s.AddVmCustomAttributesAsync(ctx, uuid, customAttributes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add custom attributes to VM: %w", err)
+	}
+
+	result, err := operation.Wait(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add custom attributes to VM: %w", err)
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to add custom attributes to VM: operation completed but no VM returned")
+	}
+
+	return result[0], nil
+}
+
+// AddVmCustomAttributesAsync adds custom attributes to the VM asynchronously.
+func (s *VMsService) AddVmCustomAttributesAsync(ctx context.Context, uuid string, customAttributes []string) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	body := &vmmModels.UpdateCustomAttributesParams{
+		CustomAttributes: customAttributes,
+	}
+
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for adding custom attributes: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.AddVmCustomAttributesApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.AddVmCustomAttributes(ctx,
+			&vmRequest.AddVmCustomAttributesRequest{
+				ExtId: &uuid,
+				Body:  body,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add custom attributes to VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM custom attributes addition")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// RemoveVmCustomAttributes removes custom attributes from the VM with the given UUID.
+func (s *VMsService) RemoveVmCustomAttributes(ctx context.Context, uuid string, customAttributes []string) (*vmmModels.Vm, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	operation, err := s.RemoveVmCustomAttributesAsync(ctx, uuid, customAttributes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove custom attributes from VM: %w", err)
+	}
+
+	result, err := operation.Wait(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove custom attributes from VM: %w", err)
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to remove custom attributes from VM: operation completed but no VM returned")
+	}
+
+	return result[0], nil
+}
+
+// RemoveVmCustomAttributesAsync removes custom attributes from the VM asynchronously.
+func (s *VMsService) RemoveVmCustomAttributesAsync(ctx context.Context, uuid string, customAttributes []string) (converged.Operation[vmmModels.Vm], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	body := &vmmModels.UpdateCustomAttributesParams{
+		CustomAttributes: customAttributes,
+	}
+
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for removing custom attributes: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.RemoveVmCustomAttributesApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.RemoveVmCustomAttributes(ctx,
+			&vmRequest.RemoveVmCustomAttributesRequest{
+				ExtId: &uuid,
+				Body:  body,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove custom attributes from VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM custom attributes removal")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		s.Get,
+	), nil
+}
+
+// DeleteCdRom deletes a CD-ROM device from the VM identified by uuid.
+// It fetches the VM's current ETag, issues the delete, and waits for the
+// asynchronous task to complete before returning.
+func (s *VMsService) DeleteCdRom(ctx context.Context, uuid string, cdRomUUID string) error {
+	if s.client == nil {
+		return errors.New("client is not initialized")
+	}
+	operation, err := s.DeleteCdRomAsync(ctx, uuid, cdRomUUID)
+	if err != nil {
+		return fmt.Errorf("failed to delete CD-ROM from VM: %w", err)
+	}
+	_, err = operation.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete CD-ROM from VM: %w", err)
+	}
+	return nil
+}
+
+// DeleteCdRomAsync starts an asynchronous CD-ROM deletion on the VM.
+// The caller receives an Operation that can be polled or waited on.
+func (s *VMsService) DeleteCdRomAsync(ctx context.Context, uuid string, cdRomUUID string) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	_, args, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx,
+			&vmRequest.GetVmByIdRequest{
+				ExtId: &uuid,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for CD-ROM deletion: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.DeleteCdRomApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.DeleteCdRomById(ctx,
+			&vmRequest.DeleteCdRomByIdRequest{
+				VmExtId: &uuid,
+				ExtId:   &cdRomUUID,
+			},
+			args,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete CD-ROM from VM: %w", err)
+	}
+
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for CD-ROM deletion")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		func(ctx context.Context, uuid string) (*converged.NoEntity, error) {
+			return converged.NoEntityGetter(ctx, uuid)
+		},
+	), nil
+}
+
+// GenerateConsoleToken obtains a JWT token and WebSocket URI for VNC console
+// access to the VM identified by uuid. It calls the generate-console-token API,
+// waits for the asynchronous task to complete, then extracts VmConsoleToken and
+// WsUri from the task's CompletionDetails.
+func (s *VMsService) GenerateConsoleToken(ctx context.Context, uuid string) (*converged.VMConsoleToken, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	operation, err := s.GenerateConsoleTokenAsync(ctx, uuid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate console token: %w", err)
+	}
+
+	_, err = operation.Wait(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("console token task failed: %w", err)
+	}
+
+	taskID := operation.UUID()
+	taskResp, err := CallAPI[*prismModels.GetTaskApiResponse, prismModels.Task](
+		s.client.TasksApiInstance.ServiceClient.GetTaskById(ctx,
+			&taskRequest.GetTaskByIdRequest{
+				ExtId: &taskID,
+			},
+			nil,
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get completed task: %w", err)
+	}
+
+	var token, wsUri string
+	for _, kv := range taskResp.CompletionDetails {
+		if kv.Name == nil {
+			continue
+		}
+		switch *kv.Name {
+		case consoleTokenKey:
+			if kv.Value != nil {
+				if v := kv.Value.GetValue(); v != nil {
+					if str, ok := v.(string); ok {
+						token = str
+					}
+				}
+			}
+		case consoleWsUriKey:
+			if kv.Value != nil {
+				if v := kv.Value.GetValue(); v != nil {
+					if str, ok := v.(string); ok {
+						wsUri = str
+					}
+				}
+			}
+		}
+	}
+
+	if token == "" || wsUri == "" {
+		return nil, fmt.Errorf("task completionDetails missing VmConsoleToken or WsUri")
+	}
+
+	return &converged.VMConsoleToken{Token: token, WsUri: wsUri}, nil
+}
+
+// GenerateConsoleTokenAsync starts the generate-console-token API call for the
+// VM identified by uuid. The caller receives an Operation that can be polled or
+// waited on; use GenerateConsoleToken for the synchronous convenience wrapper
+// that also extracts the token and WsUri from the completed task.
+func (s *VMsService) GenerateConsoleTokenAsync(ctx context.Context, uuid string) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+
+	resp, err := s.client.VmApiInstance.ServiceClient.GenerateConsoleTokenById(ctx,
+		&vmRequest.GenerateConsoleTokenByIdRequest{
+			ExtId: &uuid,
+		},
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate console token: %w", err)
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, fmt.Errorf("generate-console-token returned empty response")
+	}
+
+	dataVal := resp.Data.GetValue()
+	if dataVal == nil {
+		return nil, fmt.Errorf("generate-console-token response data is nil")
+	}
+
+	taskRef, ok := dataVal.(vmmConfig.TaskReference)
+	if !ok {
+		return nil, fmt.Errorf("generate-console-token returned unexpected type: %T", dataVal)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil")
+	}
+
+	return NewOperation(
+		*taskRef.ExtId,
+		s.client,
+		func(ctx context.Context, uuid string) (*converged.NoEntity, error) {
+			return converged.NoEntityGetter(ctx, uuid)
+		},
+	), nil
+}
+
+// ListNicsByVmId lists the NICs attached to the VM with the given UUID.
+// The dedicated NIC listing endpoint reliably returns network info including
+// learned IP addresses, which may not be populated in the VM GET response.
+func (s *VMsService) ListNicsByVmId(ctx context.Context, vmUUID string) ([]vmmModels.Nic, error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	resp, err := s.client.VmApiInstance.ServiceClient.ListNicsByVmId(ctx, &vmRequest.ListNicsByVmIdRequest{
+		VmExtId: &vmUUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list NICs for VM %s: %w", vmUUID, err)
+	}
+	if resp == nil || resp.Data == nil {
+		return nil, nil
+	}
+	data := resp.Data.GetValue()
+	if data == nil {
+		return nil, nil
+	}
+	nics, ok := data.([]vmmModels.Nic)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type for ListNicsByVmId response data: %T", data)
+	}
+	return nics, nil
+}
+
+// mergeArgs merges the etag and context headers into a single map.
+func mergeArgs(primary map[string]any, secondary map[string]any) map[string]any {
+	if len(primary) == 0 && len(secondary) == 0 {
+		return nil
+	}
+	merged := make(map[string]any, len(primary)+len(secondary))
+	maps.Copy(merged, secondary)
+	maps.Copy(merged, primary)
+	return merged
+}
+
+func noEntityOperation(taskUUID string, client *v4prismGoClient.Client) converged.Operation[converged.NoEntity] {
+	return NewOperation(
+		taskUUID,
+		client,
+		func(ctx context.Context, uuid string) (*converged.NoEntity, error) {
+			return converged.NoEntityGetter(ctx, uuid)
+		},
+	)
+}
+
+// AddDisk adds a disk to the VM and returns an async operation for the task.
+func (s *VMsService) AddDisk(ctx context.Context, vmUUID string, disk *vmmModels.Disk) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	if disk == nil {
+		return nil, fmt.Errorf("disk payload must be *vmmModels.Disk")
+	}
+
+	_, etagArgs, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx, &vmRequest.GetVmByIdRequest{ExtId: &vmUUID}, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM details: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.CreateDiskApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.CreateDisk(
+			ctx,
+			&vmRequest.CreateDiskRequest{VmExtId: &vmUUID, Body: disk},
+			mergeArgs(etagArgs, headerArgs(ctx)),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add disk to VM: %w", err)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM disk add")
+	}
+	return noEntityOperation(*taskRef.ExtId, s.client), nil
+}
+
+// GrowDisk updates an existing VM disk and returns an async operation for the task.
+func (s *VMsService) GrowDisk(ctx context.Context, vmUUID string, diskUUID string, disk *vmmModels.Disk) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	if disk == nil {
+		return nil, fmt.Errorf("disk payload must be *vmmModels.Disk")
+	}
+
+	_, etagArgs, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx, &vmRequest.GetVmByIdRequest{ExtId: &vmUUID}, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM details: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.UpdateDiskApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.UpdateDiskById(
+			ctx,
+			&vmRequest.UpdateDiskByIdRequest{VmExtId: &vmUUID, ExtId: &diskUUID, Body: disk},
+			mergeArgs(etagArgs, headerArgs(ctx)),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to grow disk size for VM: %w", err)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM disk grow")
+	}
+	return noEntityOperation(*taskRef.ExtId, s.client), nil
+}
+
+// DeleteDisk deletes a disk from the VM and returns an async operation for the task.
+func (s *VMsService) DeleteDisk(ctx context.Context, vmUUID string, diskUUID string) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	_, etagArgs, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx, &vmRequest.GetVmByIdRequest{ExtId: &vmUUID}, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM details: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.DeleteDiskApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.DeleteDiskById(
+			ctx,
+			&vmRequest.DeleteDiskByIdRequest{VmExtId: &vmUUID, ExtId: &diskUUID},
+			mergeArgs(etagArgs, headerArgs(ctx)),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete disk from VM: %w", err)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM disk delete")
+	}
+	return noEntityOperation(*taskRef.ExtId, s.client), nil
+}
+
+// AddNIC adds a NIC to the VM and returns an async operation for the task.
+func (s *VMsService) AddNIC(ctx context.Context, vmUUID string, nic *vmmModels.Nic) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	if nic == nil {
+		return nil, fmt.Errorf("nic payload must be *vmmModels.Nic")
+	}
+
+	_, etagArgs, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx, &vmRequest.GetVmByIdRequest{ExtId: &vmUUID}, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM details: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.CreateNicApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.CreateNic(
+			ctx,
+			&vmRequest.CreateNicRequest{VmExtId: &vmUUID, Body: nic},
+			mergeArgs(etagArgs, headerArgs(ctx)),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add NIC to VM: %w", err)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM NIC add")
+	}
+	return noEntityOperation(*taskRef.ExtId, s.client), nil
+}
+
+// DeleteNIC deletes a NIC from the VM and returns an async operation for the task.
+func (s *VMsService) DeleteNIC(ctx context.Context, vmUUID string, nicUUID string) (converged.Operation[converged.NoEntity], error) {
+	if s.client == nil {
+		return nil, errors.New("client is not initialized")
+	}
+	_, etagArgs, err := GetEntityAndEtag(
+		s.client.VmApiInstance.ServiceClient.GetVmById(ctx, &vmRequest.GetVmByIdRequest{ExtId: &vmUUID}, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VM for NIC delete: %w", err)
+	}
+
+	taskRef, err := CallAPI[*vmmModels.DeleteNicApiResponse, vmmConfig.TaskReference](
+		s.client.VmApiInstance.ServiceClient.DeleteNicById(
+			ctx,
+			&vmRequest.DeleteNicByIdRequest{VmExtId: &vmUUID, ExtId: &nicUUID},
+			mergeArgs(etagArgs, headerArgs(ctx)),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete NIC from VM: %w", err)
+	}
+	if taskRef.ExtId == nil {
+		return nil, fmt.Errorf("task reference ExtId is nil for VM NIC delete")
+	}
+	return noEntityOperation(*taskRef.ExtId, s.client), nil
+}
+
+// GetVMByBiosUUID returns the VM matching the given BIOS UUID. When multiple VMs share
+// the same BIOS UUID (e.g. due to cloning), it resolves the chain by returning the leaf
+// VM that is not referenced as a source by any other VM.
+func (s *VMsService) GetVMByBiosUUID(ctx context.Context, biosUUID string) (*vmmModels.Vm, error) {
+	vms, err := s.List(ctx, converged.WithFilter(fmt.Sprintf("biosUuid eq '%s'", biosUUID)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list VMs: %w", err)
+	}
+	return resolveVMByBiosUUID(vms, biosUUID)
+}
+
+// resolveVMByBiosUUID selects the single VM identified by biosUUID from a list of VMs
+// that all share that BIOS UUID. A single match is returned directly. When several VMs
+// share the BIOS UUID (e.g. a clone chain), the leaf VM - the one whose ExtId is not
+// referenced as the Source of any other VM in the list - is returned. It errors when no
+// VM is found or when the chain cannot be resolved to a single leaf.
+func resolveVMByBiosUUID(vms []vmmModels.Vm, biosUUID string) (*vmmModels.Vm, error) {
+	if len(vms) == 0 {
+		return nil, fmt.Errorf("no VM found with bios UUID: %s", biosUUID)
+	}
+	if len(vms) == 1 {
+		return &vms[0], nil
+	}
+
+	referenced := map[string]bool{}
+	for i := range vms {
+		if vms[i].Source != nil && vms[i].Source.ExtId != nil {
+			referenced[*vms[i].Source.ExtId] = true
+		}
+	}
+	var heads []*vmmModels.Vm
+	for i := range vms {
+		if vms[i].ExtId != nil && !referenced[*vms[i].ExtId] {
+			heads = append(heads, &vms[i])
+		}
+	}
+	if len(heads) == 1 {
+		return heads[0], nil
+	}
+	return nil, fmt.Errorf("found %d VMs with bios UUID %s but could not resolve to a single VM", len(vms), biosUUID)
+}

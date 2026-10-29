@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build !windows
-// +build !windows
 
 // Package journal provides write bindings to the local systemd journal.
 // It is implemented in pure Go and connects to the journal directly over its
@@ -31,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"strconv"
@@ -67,6 +65,58 @@ func Enabled() bool {
 	defer conn.Close()
 
 	return true
+}
+
+// StderrIsJournalStream returns whether the process stderr is connected
+// to the Journal's stream transport.
+//
+// This can be used for automatic protocol upgrading described in [Journal Native Protocol].
+//
+// Returns true if JOURNAL_STREAM environment variable is present,
+// and stderr's device and inode numbers match it.
+//
+// Error is returned if unexpected error occurs: e.g. if JOURNAL_STREAM environment variable
+// is present, but malformed, fstat syscall fails, etc.
+//
+// [Journal Native Protocol]: https://systemd.io/JOURNAL_NATIVE_PROTOCOL/#automatic-protocol-upgrading
+func StderrIsJournalStream() (bool, error) {
+	return fdIsJournalStream(syscall.Stderr)
+}
+
+// StdoutIsJournalStream returns whether the process stdout is connected
+// to the Journal's stream transport.
+//
+// Returns true if JOURNAL_STREAM environment variable is present,
+// and stdout's device and inode numbers match it.
+//
+// Error is returned if unexpected error occurs: e.g. if JOURNAL_STREAM environment variable
+// is present, but malformed, fstat syscall fails, etc.
+//
+// Most users should probably use [StderrIsJournalStream].
+func StdoutIsJournalStream() (bool, error) {
+	return fdIsJournalStream(syscall.Stdout)
+}
+
+func fdIsJournalStream(fd int) (bool, error) {
+	journalStream := os.Getenv("JOURNAL_STREAM")
+	if journalStream == "" {
+		return false, nil
+	}
+
+	var expectedStat syscall.Stat_t
+	_, err := fmt.Sscanf(journalStream, "%d:%d", &expectedStat.Dev, &expectedStat.Ino)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse JOURNAL_STREAM=%q: %w", journalStream, err)
+	}
+
+	var stat syscall.Stat_t
+	err = syscall.Fstat(fd, &stat)
+	if err != nil {
+		return false, err
+	}
+
+	match := stat.Dev == expectedStat.Dev && stat.Ino == expectedStat.Ino
+	return match, nil
 }
 
 // Send a message to the local systemd journal. vars is a map of journald
@@ -142,7 +192,7 @@ func appendVariable(w io.Writer, name, value string) {
 		 * - the data, followed by a newline
 		 */
 		fmt.Fprintln(w, name)
-		binary.Write(w, binary.LittleEndian, uint64(len(value)))
+		_ = binary.Write(w, binary.LittleEndian, uint64(len(value)))
 		fmt.Fprintln(w, value)
 	} else {
 		/* just write the variable and value all on one line */
@@ -162,7 +212,7 @@ func validVarName(name string) error {
 	}
 
 	for _, c := range name {
-		if !(('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '_') {
+		if ('A' > c || c > 'Z') && ('0' > c || c > '9') && c != '_' {
 			return errors.New("Variable name contains invalid characters")
 		}
 	}
@@ -187,7 +237,7 @@ func isSocketSpaceError(err error) bool {
 
 // tempFd creates a temporary, unlinked file under `/dev/shm`.
 func tempFd() (*os.File, error) {
-	file, err := ioutil.TempFile("/dev/shm/", "journal.XXXXX")
+	file, err := os.CreateTemp("/dev/shm/", "journal.XXXXX")
 	if err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ limitations under the License.
 package options
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"net"
@@ -38,6 +39,7 @@ import (
 	ccmconfig "k8s.io/cloud-provider/config"
 	ccmconfigscheme "k8s.io/cloud-provider/config/install"
 	ccmconfigv1alpha1 "k8s.io/cloud-provider/config/v1alpha1"
+	"k8s.io/cloud-provider/names"
 	cliflag "k8s.io/component-base/cli/flag"
 	cmoptions "k8s.io/controller-manager/options"
 	"k8s.io/controller-manager/pkg/clientbuilder"
@@ -54,10 +56,11 @@ const (
 
 // CloudControllerManagerOptions is the main context object for the controller manager.
 type CloudControllerManagerOptions struct {
-	Generic           *cmoptions.GenericControllerManagerConfigurationOptions
-	KubeCloudShared   *KubeCloudSharedOptions
-	ServiceController *ServiceControllerOptions
-	NodeController    *NodeControllerOptions
+	Generic                 *cmoptions.GenericControllerManagerConfigurationOptions
+	KubeCloudShared         *KubeCloudSharedOptions
+	ServiceController       *ServiceControllerOptions
+	NodeController          *NodeControllerOptions
+	NodeLifecycleController *NodeLifecycleControllerOptions
 
 	SecureServing  *apiserveroptions.SecureServingOptionsWithLoopback
 	Authentication *apiserveroptions.DelegatingAuthenticationOptions
@@ -102,6 +105,9 @@ func NewCloudControllerManagerOptionsWithProviderDefaults(defaults ProviderDefau
 		NodeController: &NodeControllerOptions{
 			NodeControllerConfiguration: &componentConfig.NodeController,
 		},
+		NodeLifecycleController: &NodeLifecycleControllerOptions{
+			NodeLifecycleControllerConfiguration: &componentConfig.NodeLifecycleController,
+		},
 		ServiceController: &ServiceControllerOptions{
 			ServiceControllerConfiguration: &componentConfig.ServiceController,
 		},
@@ -141,12 +147,13 @@ func NewDefaultComponentConfig() (*ccmconfig.CloudControllerManagerConfiguration
 }
 
 // Flags returns flags for a specific CloudController by section name
-func (o *CloudControllerManagerOptions) Flags(allControllers, disabledByDefaultControllers, allWebhooks, disabledByDefaultWebhooks []string) cliflag.NamedFlagSets {
+func (o *CloudControllerManagerOptions) Flags(allControllers []string, disabledByDefaultControllers []string, controllerAliases map[string]string, allWebhooks, disabledByDefaultWebhooks []string) cliflag.NamedFlagSets {
 	fss := cliflag.NamedFlagSets{}
-	o.Generic.AddFlags(&fss, allControllers, disabledByDefaultControllers)
+	o.Generic.AddFlags(&fss, allControllers, disabledByDefaultControllers, controllerAliases)
 	o.KubeCloudShared.AddFlags(fss.FlagSet("generic"))
-	o.NodeController.AddFlags(fss.FlagSet("node controller"))
-	o.ServiceController.AddFlags(fss.FlagSet("service controller"))
+	o.NodeController.AddFlags(fss.FlagSet(names.CloudNodeController))
+	o.NodeLifecycleController.AddFlags(fss.FlagSet(names.CloudNodeLifecycleController))
+	o.ServiceController.AddFlags(fss.FlagSet(names.ServiceLBController))
 	if o.Webhook != nil {
 		o.Webhook.AddFlags(fss.FlagSet("webhook"), allWebhooks, disabledByDefaultWebhooks)
 	}
@@ -168,7 +175,7 @@ func (o *CloudControllerManagerOptions) Flags(allControllers, disabledByDefaultC
 }
 
 // ApplyTo fills up cloud controller manager config with options.
-func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, userAgent string) error {
+func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, allControllers []string, disabledByDefaultControllers []string, controllerAliases map[string]string, userAgent string) error {
 	var err error
 
 	// Build kubeconfig first to so that if it fails, it doesn't cause leaking
@@ -184,7 +191,7 @@ func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, userAgent stri
 	c.Kubeconfig.QPS = o.Generic.ClientConnection.QPS
 	c.Kubeconfig.Burst = int(o.Generic.ClientConnection.Burst)
 
-	if err = o.Generic.ApplyTo(&c.ComponentConfig.Generic); err != nil {
+	if err = o.Generic.ApplyTo(&c.ComponentConfig.Generic, allControllers, disabledByDefaultControllers, controllerAliases); err != nil {
 		return err
 	}
 	if err = o.KubeCloudShared.ApplyTo(&c.ComponentConfig.KubeCloudShared); err != nil {
@@ -199,7 +206,7 @@ func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, userAgent stri
 		}
 	}
 	if o.WebhookServing != nil {
-		if err = o.WebhookServing.ApplyTo(&c.WebhookSecureServing); err != nil {
+		if err = o.WebhookServing.ApplyTo(&c.WebhookSecureServing, c.ComponentConfig.Webhook); err != nil {
 			return err
 		}
 	}
@@ -220,7 +227,7 @@ func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, userAgent stri
 		return err
 	}
 
-	c.EventBroadcaster = record.NewBroadcaster()
+	c.EventBroadcaster = record.NewBroadcaster(record.WithContext(context.TODO())) // TODO: move broadcaster construction to a place where there is a proper context.
 	c.EventRecorder = c.EventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: userAgent})
 
 	rootClientBuilder := clientbuilder.SimpleControllerClientBuilder{
@@ -240,17 +247,23 @@ func (o *CloudControllerManagerOptions) ApplyTo(c *config.Config, userAgent stri
 	// sync back to component config
 	// TODO: find more elegant way than syncing back the values.
 	c.ComponentConfig.NodeStatusUpdateFrequency = o.NodeStatusUpdateFrequency
-	c.ComponentConfig.NodeController.ConcurrentNodeSyncs = o.NodeController.ConcurrentNodeSyncs
+	if err = o.NodeController.ApplyTo(&c.ComponentConfig.NodeController); err != nil {
+		return err
+	}
+	if err = o.NodeLifecycleController.ApplyTo(&c.ComponentConfig.NodeLifecycleController); err != nil {
+		return err
+	}
 
 	return nil
 }
 
 // Validate is used to validate config before launching the cloud controller manager
-func (o *CloudControllerManagerOptions) Validate(allControllers, disabledByDefaultControllers, allWebhooks, disabledByDefaultWebhooks []string) error {
+func (o *CloudControllerManagerOptions) Validate(allControllers []string, disabledByDefaultControllers []string, controllerAliases map[string]string, allWebhooks, disabledByDefaultWebhooks []string) error {
 	errors := []error{}
 
-	errors = append(errors, o.Generic.Validate(allControllers, disabledByDefaultControllers)...)
+	errors = append(errors, o.Generic.Validate(allControllers, disabledByDefaultControllers, controllerAliases)...)
 	errors = append(errors, o.KubeCloudShared.Validate()...)
+	errors = append(errors, o.NodeLifecycleController.Validate()...)
 	errors = append(errors, o.ServiceController.Validate()...)
 	errors = append(errors, o.SecureServing.Validate()...)
 	errors = append(errors, o.Authentication.Validate()...)
@@ -262,7 +275,7 @@ func (o *CloudControllerManagerOptions) Validate(allControllers, disabledByDefau
 	if o.WebhookServing != nil {
 		errors = append(errors, o.WebhookServing.Validate()...)
 
-		if o.WebhookServing.BindPort == o.SecureServing.BindPort {
+		if o.WebhookServing.BindPort == o.SecureServing.BindPort && o.WebhookServing.BindPort != 0 {
 			errors = append(errors, fmt.Errorf("--webhook-secure-port cannot be the same value as --secure-port"))
 		}
 	}
@@ -282,8 +295,8 @@ func resyncPeriod(c *config.Config) func() time.Duration {
 }
 
 // Config return a cloud controller manager config objective
-func (o *CloudControllerManagerOptions) Config(allControllers, disabledByDefaultControllers, allWebhooks, disabledByDefaultWebhooks []string) (*config.Config, error) {
-	if err := o.Validate(allControllers, disabledByDefaultControllers, allWebhooks, disabledByDefaultWebhooks); err != nil {
+func (o *CloudControllerManagerOptions) Config(allControllers []string, disabledByDefaultControllers []string, controllerAliases map[string]string, allWebhooks, disabledByDefaultWebhooks []string) (*config.Config, error) {
+	if err := o.Validate(allControllers, disabledByDefaultControllers, controllerAliases, allWebhooks, disabledByDefaultWebhooks); err != nil {
 		return nil, err
 	}
 
@@ -298,7 +311,7 @@ func (o *CloudControllerManagerOptions) Config(allControllers, disabledByDefault
 	}
 
 	c := &config.Config{}
-	if err := o.ApplyTo(c, CloudControllerManagerUserAgent); err != nil {
+	if err := o.ApplyTo(c, allControllers, disabledByDefaultControllers, controllerAliases, CloudControllerManagerUserAgent); err != nil {
 		return nil, err
 	}
 

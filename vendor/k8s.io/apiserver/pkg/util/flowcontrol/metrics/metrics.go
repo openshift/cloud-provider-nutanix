@@ -47,7 +47,7 @@ const (
 
 var (
 	queueLengthBuckets            = []float64{0, 10, 25, 50, 100, 250, 500, 1000}
-	requestDurationSecondsBuckets = []float64{0, 0.005, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30}
+	requestDurationSecondsBuckets = []float64{0, 0.005, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30}
 )
 
 var registerMetrics sync.Once
@@ -94,7 +94,7 @@ var (
 			Subsystem:      subsystem,
 			Name:           "rejected_requests_total",
 			Help:           "Number of requests rejected by API Priority and Fairness subsystem",
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel, flowSchema, "reason"},
 	)
@@ -104,7 +104,7 @@ var (
 			Subsystem:      subsystem,
 			Name:           "dispatched_requests_total",
 			Help:           "Number of requests executed by API Priority and Fairness subsystem",
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel, flowSchema},
 	)
@@ -206,6 +206,16 @@ var (
 			Subsystem:      subsystem,
 			Name:           "current_inqueue_requests",
 			Help:           "Number of requests currently pending in queues of the API Priority and Fairness subsystem",
+			StabilityLevel: compbasemetrics.BETA,
+		},
+		[]string{priorityLevel, flowSchema},
+	)
+	apiserverCurrentInqueueSeats = compbasemetrics.NewGaugeVec(
+		&compbasemetrics.GaugeOpts{
+			Namespace:      namespace,
+			Subsystem:      subsystem,
+			Name:           "current_inqueue_seats",
+			Help:           "Number of seats currently pending in queues of the API Priority and Fairness subsystem",
 			StabilityLevel: compbasemetrics.ALPHA,
 		},
 		[]string{priorityLevel, flowSchema},
@@ -221,33 +231,23 @@ var (
 		},
 		[]string{priorityLevel, flowSchema},
 	)
-	apiserverRequestConcurrencyLimit = compbasemetrics.NewGaugeVec(
-		&compbasemetrics.GaugeOpts{
-			Namespace:      namespace,
-			Subsystem:      subsystem,
-			Name:           "request_concurrency_limit",
-			Help:           "Shared concurrency limit in the API Priority and Fairness subsystem",
-			StabilityLevel: compbasemetrics.ALPHA,
-		},
-		[]string{priorityLevel},
-	)
 	apiserverCurrentExecutingRequests = compbasemetrics.NewGaugeVec(
 		&compbasemetrics.GaugeOpts{
 			Namespace:      namespace,
 			Subsystem:      subsystem,
 			Name:           "current_executing_requests",
 			Help:           "Number of requests in initial (for a WATCH) or any (for a non-WATCH) execution stage in the API Priority and Fairness subsystem",
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel, flowSchema},
 	)
-	apiserverRequestConcurrencyInUse = compbasemetrics.NewGaugeVec(
+	apiserverCurrentExecutingSeats = compbasemetrics.NewGaugeVec(
 		&compbasemetrics.GaugeOpts{
 			Namespace:      namespace,
 			Subsystem:      subsystem,
-			Name:           "request_concurrency_in_use",
+			Name:           "current_executing_seats",
 			Help:           "Concurrency (number of seats) occupied by the currently executing (initial stage for a WATCH, any stage otherwise) requests in the API Priority and Fairness subsystem",
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel, flowSchema},
 	)
@@ -258,7 +258,7 @@ var (
 			Name:           "request_wait_duration_seconds",
 			Help:           "Length of time a request spent waiting in its queue",
 			Buckets:        requestDurationSecondsBuckets,
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel, flowSchema, "execute"},
 	)
@@ -302,7 +302,7 @@ var (
 			Help:      "Number of estimated seats (maximum of initial and final seats) associated with requests in API Priority and Fairness",
 			// the upper bound comes from the maximum number of seats a request
 			// can occupy which is currently set at 10.
-			Buckets:        []float64{1, 2, 4, 10},
+			Buckets:        []float64{1, 2, 4, 8, 16, 32, 64, 100},
 			StabilityLevel: compbasemetrics.ALPHA,
 		},
 		[]string{priorityLevel, flowSchema},
@@ -323,7 +323,7 @@ var (
 			Subsystem:      subsystem,
 			Name:           "nominal_limit_seats",
 			Help:           "Nominal number of execution seats configured for each priority level",
-			StabilityLevel: compbasemetrics.ALPHA,
+			StabilityLevel: compbasemetrics.BETA,
 		},
 		[]string{priorityLevel},
 	)
@@ -441,9 +441,9 @@ var (
 		apiserverNextSBounds,
 		apiserverNextDiscountedSBounds,
 		apiserverCurrentInqueueRequests,
+		apiserverCurrentInqueueSeats,
 		apiserverRequestQueueLength,
-		apiserverRequestConcurrencyLimit,
-		apiserverRequestConcurrencyInUse,
+		apiserverCurrentExecutingSeats,
 		apiserverCurrentExecutingRequests,
 		apiserverRequestWaitingSeconds,
 		apiserverRequestExecutionSeconds,
@@ -503,6 +503,11 @@ func AddRequestsInQueues(ctx context.Context, priorityLevel, flowSchema string, 
 	apiserverCurrentInqueueRequests.WithLabelValues(priorityLevel, flowSchema).Add(float64(delta))
 }
 
+// AddSeatsInQueues adds the given delta to the gauge of the # of seats in the queues of the specified flowSchema and priorityLevel
+func AddSeatsInQueues(ctx context.Context, priorityLevel, flowSchema string, delta int) {
+	apiserverCurrentInqueueSeats.WithLabelValues(priorityLevel, flowSchema).Add(float64(delta))
+}
+
 // AddRequestsExecuting adds the given delta to the gauge of executing requests of the given flowSchema and priorityLevel
 func AddRequestsExecuting(ctx context.Context, priorityLevel, flowSchema string, delta int) {
 	apiserverCurrentExecutingRequests.WithLabelValues(priorityLevel, flowSchema).Add(float64(delta))
@@ -523,10 +528,10 @@ func SetDispatchMetrics(priorityLevel string, r, s, sMin, sMax, discountedSMin, 
 	apiserverNextDiscountedSBounds.WithLabelValues(priorityLevel, "max").Set(discountedSMax)
 }
 
-// AddRequestConcurrencyInUse adds the given delta to the gauge of concurrency in use by
+// AddSeatConcurrencyInUse adds the given delta to the gauge of seats in use by
 // the currently executing requests of the given flowSchema and priorityLevel
-func AddRequestConcurrencyInUse(priorityLevel, flowSchema string, delta int) {
-	apiserverRequestConcurrencyInUse.WithLabelValues(priorityLevel, flowSchema).Add(float64(delta))
+func AddSeatConcurrencyInUse(priorityLevel, flowSchema string, delta int) {
+	apiserverCurrentExecutingSeats.WithLabelValues(priorityLevel, flowSchema).Add(float64(delta))
 }
 
 // AddReject increments the # of rejected requests for flow control
@@ -580,7 +585,6 @@ func AddDispatchWithNoAccommodation(priorityLevel, flowSchema string) {
 }
 
 func SetPriorityLevelConfiguration(priorityLevel string, nominalCL, minCL, maxCL int) {
-	apiserverRequestConcurrencyLimit.WithLabelValues(priorityLevel).Set(float64(nominalCL))
 	apiserverNominalConcurrencyLimits.WithLabelValues(priorityLevel).Set(float64(nominalCL))
 	apiserverMinimumConcurrencyLimits.WithLabelValues(priorityLevel).Set(float64(minCL))
 	apiserverMaximumConcurrencyLimits.WithLabelValues(priorityLevel).Set(float64(maxCL))

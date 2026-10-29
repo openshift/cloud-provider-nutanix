@@ -45,7 +45,6 @@ func NewCodec(e Encoder, d Decoder) Codec {
 
 // Encode is a convenience wrapper for encoding to a []byte from an Encoder
 func Encode(e Encoder, obj Object) ([]byte, error) {
-	// TODO: reuse buffer
 	buf := &bytes.Buffer{}
 	if err := e.Encode(obj, buf); err != nil {
 		return nil, err
@@ -227,6 +226,7 @@ func identifier(e Encoder) Identifier {
 	}
 	identifier, err := json.Marshal(result)
 	if err != nil {
+		//nolint:logcheck // Should not be reached.
 		klog.Fatalf("Failed marshaling identifier for base64Serializer: %v", err)
 	}
 	return Identifier(identifier)
@@ -391,6 +391,7 @@ func (v multiGroupVersioner) Identifier() string {
 	}
 	identifier, err := json.Marshal(result)
 	if err != nil {
+		//nolint:logcheck // Should not be reached.
 		klog.Fatalf("Failed marshaling Identifier for %#v: %v", v, err)
 	}
 	return string(identifier)

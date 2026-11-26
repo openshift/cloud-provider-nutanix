@@ -47,7 +47,10 @@ type SelfHostedSpecInput struct {
 	ArtifactFolder        string
 	SkipCleanup           bool
 	ControlPlaneWaiters   clusterctl.ControlPlaneWaiters
-	Flavor                string
+	// PreCleanupSelfHostedCluster hook can be used to run code before the self-hosted cluster is cleaned up.
+	// This is for example used in core Cluster API to dump secrets, which might not be safe in general.
+	PreCleanupSelfHostedCluster func(managementClusterProxy framework.ClusterProxy)
+	Flavor                      string
 
 	// InfrastructureProviders specifies the infrastructure to use for clusterctl
 	// operations (Example: get cluster templates).
@@ -161,7 +164,7 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 		// controller images into the nodes.
 		if hasDockerInfrastructureProvider {
 			images := []string{}
-			if preloadList := strings.TrimSuffix(strings.TrimPrefix(clusterctlVariables["DOCKER_PRELOAD_IMAGES"], "["), "]"); preloadList != "" {
+			if preloadList := strings.TrimSuffix(strings.TrimPrefix(input.E2EConfig.GetVariableOrEmpty("DOCKER_PRELOAD_IMAGES"), "["), "]"); preloadList != "" {
 				images = strings.Split(preloadList, ",")
 			}
 			for _, image := range input.E2EConfig.Images {
@@ -365,19 +368,20 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 			// Cluster is using ClusterClass, upgrade via topology.
 			By("Upgrading the Cluster topology")
 			framework.UpgradeClusterTopologyAndWaitForUpgrade(ctx, framework.UpgradeClusterTopologyAndWaitForUpgradeInput{
-				ClusterProxy:                   selfHostedClusterProxy,
-				Cluster:                        clusterResources.Cluster,
-				ControlPlane:                   clusterResources.ControlPlane,
-				EtcdImageTag:                   etcdVersionUpgradeTo,
-				DNSImageTag:                    coreDNSVersionUpgradeTo,
-				MachineDeployments:             clusterResources.MachineDeployments,
-				MachinePools:                   clusterResources.MachinePools,
-				KubernetesUpgradeVersion:       input.E2EConfig.MustGetVariable(KubernetesVersionUpgradeTo),
-				WaitForMachinesToBeUpgraded:    input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
-				WaitForMachinePoolToBeUpgraded: input.E2EConfig.GetIntervals(specName, "wait-machine-pool-upgrade"),
-				WaitForKubeProxyUpgrade:        input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
-				WaitForDNSUpgrade:              input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
-				WaitForEtcdUpgrade:             input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
+				ClusterProxy:                         selfHostedClusterProxy,
+				Cluster:                              clusterResources.Cluster,
+				ControlPlane:                         clusterResources.ControlPlane,
+				EtcdImageTag:                         etcdVersionUpgradeTo,
+				DNSImageTag:                          coreDNSVersionUpgradeTo,
+				MachineDeployments:                   clusterResources.MachineDeployments,
+				MachinePools:                         clusterResources.MachinePools,
+				KubernetesUpgradeVersion:             input.E2EConfig.MustGetVariable(KubernetesVersionUpgradeTo),
+				WaitForControlPlaneToBeUpgraded:      input.E2EConfig.GetIntervals(specName, "wait-control-plane-upgrade"),
+				WaitForMachineDeploymentToBeUpgraded: input.E2EConfig.GetIntervals(specName, "wait-machine-deployment-upgrade"),
+				WaitForMachinePoolToBeUpgraded:       input.E2EConfig.GetIntervals(specName, "wait-machine-pool-upgrade"),
+				WaitForKubeProxyUpgrade:              input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
+				WaitForDNSUpgrade:                    input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
+				WaitForEtcdUpgrade:                   input.E2EConfig.GetIntervals(specName, "wait-machine-upgrade"),
 			})
 		} else {
 			// Cluster is not using ClusterClass, upgrade via individual resources.
@@ -462,6 +466,10 @@ func SelfHostedSpec(ctx context.Context, inputGetter func() SelfHostedSpecInput)
 
 	AfterEach(func() {
 		if selfHostedNamespace != nil {
+			if input.PreCleanupSelfHostedCluster != nil {
+				By("Running PreCleanupSelfHostedCluster steps against the self-hosted cluster")
+				input.PreCleanupSelfHostedCluster(selfHostedClusterProxy)
+			}
 			// Dump all Cluster API related resources to artifacts before pivoting back.
 			framework.DumpAllResourcesAndLogs(ctx, selfHostedClusterProxy, input.ClusterctlConfigPath, input.ArtifactFolder, namespace, clusterResources.Cluster)
 		}

@@ -1,0 +1,18 @@
+version: 2
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - nolintlint
+    - staticcheck
+    - unused
+  settings:
+    nolintlint:
+      allow-unused: true
+      require-explanation: true
+      require-specific: true
+run:
+  concurrency: 4
+  timeout: 5m

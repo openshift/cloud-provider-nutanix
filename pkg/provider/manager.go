@@ -19,18 +19,25 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"sort"
 	"strings"
 
+	"github.com/nutanix-cloud-native/prism-go-client/converged"
 	convergedV4 "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
 	prismclientv4 "github.com/nutanix-cloud-native/prism-go-client/v4"
+	"github.com/nutanix-cloud-native/prism-go-client/versionutils"
 
 	set "github.com/hashicorp/go-set/v3"
 	clusterModels "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/config"
+	multidomainCommonModels "github.com/nutanix/ntnx-api-golang-clients/multidomain-go-client/v4/models/common/v1/config"
+	multidomainModels "github.com/nutanix/ntnx-api-golang-clients/multidomain-go-client/v4/models/multidomain/v4/config"
+	prismModels "github.com/nutanix/ntnx-api-golang-clients/prism-go-client/v4/models/prism/v4/config"
 	vmmModels "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/vmm/v4/ahv/config"
 	"go4.org/netipx"
 	v1 "k8s.io/api/core/v1"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	cloudprovider "k8s.io/cloud-provider"
@@ -119,7 +126,7 @@ func (n *nutanixManager) getInstanceMetadata(ctx context.Context, node *v1.Node)
 	nodeName := node.Name
 	klog.V(1).Infof("fetching instance metadata for node %s", nodeName) //nolint:typecheck
 
-	vmUUID, err := n.getNutanixInstanceIDForNode(ctx, node)
+	vmIdentifier, err := n.getNutanixInstanceIDForNode(ctx, node)
 	if err != nil {
 		return nil, err
 	}
@@ -128,12 +135,13 @@ func (n *nutanixManager) getInstanceMetadata(ctx context.Context, node *v1.Node)
 	if err != nil {
 		return nil, err
 	}
-	vm, err := nClient.GetVM(ctx, vmUUID)
+
+	vm, err := n.resolveVM(ctx, nClient, vmIdentifier)
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate providerID from VM (checks customAttributes first, then falls back to vmUUID)
+	// Generate providerID from VM (checks customAttributes first, then falls back to vmIdentifier)
 	providerID, err := n.generateProviderIDFromVM(ctx, vm)
 	if err != nil {
 		return nil, err
@@ -153,6 +161,10 @@ func (n *nutanixManager) getInstanceMetadata(ctx context.Context, node *v1.Node)
 		return nil, err
 	}
 
+	if err := n.addNodeLabels(ctx, nClient, vm, node); err != nil {
+		return nil, err
+	}
+
 	if n.config.EnableCustomLabeling {
 		klog.V(1).Infof("adding custom labels %s", nodeName) //nolint:typecheck
 		err = n.addCustomLabelsToNode(ctx, node)
@@ -160,6 +172,12 @@ func (n *nutanixManager) getInstanceMetadata(ctx context.Context, node *v1.Node)
 			return nil, err
 		}
 	}
+
+	// Metro node-group labeling is derived purely from the VM's custom attributes
+	if err := n.reconcileMetroNodeGroupLabel(node, vm); err != nil {
+		return nil, err
+	}
+
 	return &cloudprovider.InstanceMetadata{
 		ProviderID:    providerID,
 		InstanceType:  constants.InstanceType,
@@ -169,56 +187,237 @@ func (n *nutanixManager) getInstanceMetadata(ctx context.Context, node *v1.Node)
 	}, nil
 }
 
+// addNodeLabels publishes the core Nutanix identity labels on every Nutanix-managed node,
+// independent of EnableCustomLabeling: Prism Element UUID/name, and, on PC 7.6+, project and
+// resource-group UUIDs for VMs associated with a non-default project. Project-scoped Prism
+// clients cannot call cluster-wide APIs (GetCluster), so PE UUID/name are instead derived from
+// the VM's project resource group.
+func (n *nutanixManager) addNodeLabels(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm, node *v1.Node) error {
+	var labels map[string]string
+	var err error
+	if nClient.IsProjectScoped(ctx) {
+		labels, err = ProjectScopedLabels(ctx, nClient, vm)
+	} else {
+		labels, err = ProjectNonScopedLabels(ctx, nClient, vm)
+	}
+	if err != nil {
+		return err
+	}
+
+	if ok := helpers.AddOrUpdateLabelsOnNode(n.client, labels, node); !ok {
+		return fmt.Errorf("error occurred while updating labels on node %s", node.Name)
+	}
+	return nil
+}
+
+// addCustomLabelsToNode publishes the opt-in (EnableCustomLabeling) host-level labels. Host
+// details are not available to project-scoped Prism clients, so this is a no-op for them.
 func (n *nutanixManager) addCustomLabelsToNode(ctx context.Context, node *v1.Node) error {
-	var cluster *clusterModels.Cluster
-	var host *clusterModels.Host
-
-	labels := map[string]string{}
-
 	nClient, err := n.nutanixClient.Get()
 	if err != nil {
 		return err
 	}
 
-	providerID, err := n.getNutanixProviderIDForNode(ctx, node)
-	if err != nil {
-		return err
-	}
-	vmUUID := n.stripNutanixIDFromProviderID(providerID)
-	vm, err := nClient.GetVM(ctx, vmUUID)
-	if err != nil {
-		return err
-	}
-
-	if vm.Cluster != nil && vm.Cluster.ExtId != nil {
-		cluster, err = nClient.GetCluster(ctx, *vm.Cluster.ExtId)
+	if !nClient.IsProjectScoped(ctx) {
+		providerID, err := n.getNutanixProviderIDForNode(ctx, node)
 		if err != nil {
 			return err
 		}
 
-		if vm.Host != nil && vm.Host.ExtId != nil {
-			host, err = nClient.GetClusterHost(ctx, *vm.Cluster.ExtId, *vm.Host.ExtId)
-			if err != nil {
-				return err
+		vmIdentifier := n.stripNutanixIDFromProviderID(providerID)
+		vm, err := n.resolveVM(ctx, nClient, vmIdentifier)
+		if err != nil {
+			return err
+		}
+
+		labels, err := hostLabels(ctx, nClient, vm)
+		if err != nil {
+			return err
+		}
+		if len(labels) == 0 {
+			return nil
+		}
+
+		if ok := helpers.AddOrUpdateLabelsOnNode(n.client, labels, node); !ok {
+			return fmt.Errorf("error occurred while updating labels on node %s", node.Name)
+		}
+	}
+	return nil
+}
+
+func hostLabels(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (map[string]string, error) {
+	labels := map[string]string{}
+	if vm.Cluster == nil || vm.Cluster.ExtId == nil || vm.Host == nil || vm.Host.ExtId == nil {
+		return labels, nil
+	}
+
+	host, err := nClient.GetClusterHost(ctx, *vm.Cluster.ExtId, *vm.Host.ExtId)
+	if err != nil {
+		return nil, err
+	}
+
+	if host.ExtId != nil && host.HostName != nil {
+		labels[constants.HostUUIDLabel] = *host.ExtId
+		labels[constants.HostNameLabel] = *host.HostName
+	}
+
+	return labels, nil
+}
+
+// ProjectScopedLabels builds labels for VMs served by a project-scoped Prism client (PC 7.6+).
+// Cluster-wide APIs such as GetCluster are unavailable to these clients, so PE UUID/name are
+// derived from the placement target of the VM's project resource group instead.
+func ProjectScopedLabels(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (map[string]string, error) {
+	labels, resourceGroups, err := projectAndResourceGroupLabels(ctx, nClient, vm)
+	if err != nil {
+		return nil, err
+	}
+
+	if vm.Project == nil || vm.Project.ExtId == nil || vm.Cluster == nil || vm.Cluster.ExtId == nil {
+		return labels, nil
+	}
+
+	for _, resourceGroup := range resourceGroups {
+		if resourceGroup.ProjectExtId == nil || *resourceGroup.ProjectExtId != *vm.Project.ExtId {
+			continue
+		}
+		for _, placementTarget := range resourceGroup.PlacementTargets {
+			if placementTarget.ClusterExtId == nil || *placementTarget.ClusterExtId != *vm.Cluster.ExtId {
+				continue
+			}
+			labels[constants.PEUUIDLabel] = *placementTarget.ClusterExtId
+			if clusterName := capabilityValue(placementTarget.Capabilities, constants.ResourceGroupClusterNameCapabilityKey); clusterName != "" {
+				labels[constants.PENameLabel] = clusterName
 			}
 		}
 	}
 
-	if cluster != nil && cluster.ExtId != nil && cluster.Name != nil {
-		labels[constants.CustomPEUUIDLabel] = *cluster.ExtId
-		labels[constants.CustomPENameLabel] = *cluster.Name
+	return labels, nil
+}
+
+// capabilityValue returns the string value of the named capability, or "" if absent or not a
+// string-typed value.
+func capabilityValue(capabilities []multidomainCommonModels.KVPair, name string) string {
+	for _, capability := range capabilities {
+		if capability.Name == nil || *capability.Name != name || capability.Value == nil {
+			continue
+		}
+		if value, ok := capability.Value.GetValue().(string); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func ProjectNonScopedLabels(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (map[string]string, error) {
+	labels := map[string]string{}
+
+	if vm.Cluster != nil && vm.Cluster.ExtId != nil {
+		cluster, err := nClient.GetCluster(ctx, *vm.Cluster.ExtId)
+		if err != nil {
+			return nil, err
+		}
+		if cluster.ExtId != nil && cluster.Name != nil {
+			labels[constants.PEUUIDLabel] = *cluster.ExtId
+			labels[constants.PENameLabel] = *cluster.Name
+		}
 	}
 
-	if host != nil && host.ExtId != nil && host.HostName != nil {
-		labels[constants.CustomHostUUIDLabel] = *host.ExtId
-		labels[constants.CustomHostNameLabel] = *host.HostName
+	projectLabels, _, err := projectAndResourceGroupLabels(ctx, nClient, vm)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(labels, projectLabels)
+
+	if _, hasProjectLabel := labels[constants.ProjectUUIDLabel]; !hasProjectLabel {
+		defaultProjectExtId := nClient.GetDefaultProjectExtId(ctx)
+		if defaultProjectExtId != nil {
+			labels[constants.ProjectUUIDLabel] = zeroUUID
+		}
 	}
 
-	result := helpers.AddOrUpdateLabelsOnNode(n.client, labels, node)
-	if !result {
-		return fmt.Errorf("error occurred while updating labels on node %s", node.Name)
+	return labels, nil
+}
+
+func projectAndResourceGroupLabels(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (map[string]string, []multidomainModels.ResourceGroup, error) {
+	labels := map[string]string{}
+	if vm.Project == nil || vm.Project.ExtId == nil {
+		return labels, nil, nil
 	}
+
+	pcVersion, err := nClient.GetPrismCentralVersion(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get Prism Central version for project labels: %w", err)
+	}
+	if !pcVersionSupportsProjects(pcVersion) {
+		return labels, nil, nil
+	}
+
+	labels[constants.ProjectUUIDLabel] = *vm.Project.ExtId
+
+	if defaultProjectExtId := nClient.GetDefaultProjectExtId(ctx); defaultProjectExtId != nil && *vm.Project.ExtId == *defaultProjectExtId {
+		return labels, nil, nil
+	}
+
+	resourceGroups, err := nClient.GetResourceGroups(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, resourceGroup := range resourceGroups {
+		if resourceGroup.ProjectExtId == nil || *resourceGroup.ProjectExtId != *vm.Project.ExtId {
+			continue
+		}
+		if resourceGroup.ExtId != nil {
+			labels[constants.ResourceGroupUUIDLabel] = *resourceGroup.ExtId
+		}
+	}
+
+	return labels, resourceGroups, nil
+}
+
+// reconcileMetroNodeGroupLabel labels the node with its Nutanix Metro site group name when the
+// backing VM carries the metro-node-group-name custom attribute (set by CAPX).
+func (n *nutanixManager) reconcileMetroNodeGroupLabel(node *v1.Node, vm *vmmModels.Vm) error {
+	if node == nil {
+		return fmt.Errorf("node cannot be nil when reconciling metro node-group label")
+	}
+
+	groupName := getVMCustomAttributeValue(vm, constants.MetroNodeGroupNameAttributeKey)
+	if groupName == "" {
+		return nil
+	}
+
+	if errs := k8svalidation.IsValidLabelValue(groupName); len(errs) > 0 {
+		klog.Warningf("skipping metro node-group label on node %s: %q is not a valid Kubernetes label value: %v", node.Name, groupName, errs) //nolint:typecheck
+		return nil
+	}
+
+	if node.Labels[constants.MetroNodeGroupLabel] == groupName {
+		return nil
+	}
+
+	labels := map[string]string{constants.MetroNodeGroupLabel: groupName}
+	if ok := helpers.AddOrUpdateLabelsOnNode(n.client, labels, node); !ok {
+		return fmt.Errorf("error occurred while updating metro node-group label on node %s", node.Name)
+	}
+	klog.V(1).Infof("set metro node-group label %s=%s on node %s", constants.MetroNodeGroupLabel, groupName, node.Name) //nolint:typecheck
 	return nil
+}
+
+// getVMCustomAttributeValue returns the value of the VM custom attribute matching key, where each
+// custom attribute is encoded as "key:value". It returns an empty string if not found.
+func getVMCustomAttributeValue(vm *vmmModels.Vm, key string) string {
+	if vm == nil {
+		return ""
+	}
+	for _, attr := range vm.CustomAttributes {
+		parts := strings.SplitN(attr, ":", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == key {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
 }
 
 func (n *nutanixManager) getTopologyCategories() (config.TopologyCategories, error) {
@@ -245,7 +444,7 @@ func (n *nutanixManager) getTopologyCategories() (config.TopologyCategories, err
 }
 
 func (n *nutanixManager) nodeExists(ctx context.Context, node *v1.Node) (bool, error) {
-	vmUUID, err := n.getNutanixInstanceIDForNode(ctx, node)
+	vmIdentifier, err := n.getNutanixInstanceIDForNode(ctx, node)
 	if err != nil {
 		return false, err
 	}
@@ -253,18 +452,18 @@ func (n *nutanixManager) nodeExists(ctx context.Context, node *v1.Node) (bool, e
 	if err != nil {
 		return false, err
 	}
-	_, err = nClient.GetVM(ctx, vmUUID)
+	_, err = n.resolveVM(ctx, nClient, vmIdentifier)
 	if err != nil {
-		if !strings.Contains(fmt.Sprint(err), "VM_NOT_FOUND") {
-			return false, err
+		if converged.IsNotFound(err) {
+			return false, nil
 		}
-		return false, nil
+		return false, err
 	}
 	return true, nil
 }
 
 func (n *nutanixManager) isNodeShutdown(ctx context.Context, node *v1.Node) (bool, error) {
-	vmUUID, err := n.getNutanixInstanceIDForNode(ctx, node)
+	vmIdentifier, err := n.getNutanixInstanceIDForNode(ctx, node)
 	if err != nil {
 		return false, err
 	}
@@ -272,7 +471,7 @@ func (n *nutanixManager) isNodeShutdown(ctx context.Context, node *v1.Node) (boo
 	if err != nil {
 		return false, err
 	}
-	vm, err := nClient.GetVM(ctx, vmUUID)
+	vm, err := n.resolveVM(ctx, nClient, vmIdentifier)
 	if err != nil {
 		return false, err
 	}
@@ -286,7 +485,64 @@ func (n *nutanixManager) isVMShutdown(vm *vmmModels.Vm) bool {
 	return *vm.PowerState == vmmModels.POWERSTATE_OFF
 }
 
-func (n *nutanixManager) getNutanixInstanceIDForNode(ctx context.Context, node *v1.Node) (string, error) {
+// minPCVersionForBiosUUIDLookup is the minimum Prism Central version that
+// exposes the BIOS UUID lookup API.
+var minPCVersionForBiosUUIDLookup = versionutils.Parse("7.6")
+
+// resolveVM resolves a VM by its identifier, preferring a BIOS UUID lookup and
+// falling back to a lookup by VM ExtId.
+func (n *nutanixManager) resolveVM(ctx context.Context, nClient interfaces.Prism, vmIdentifier string) (*vmmModels.Vm, error) {
+	supportsBiosLookup := n.pcSupportsBiosUUIDLookup(ctx, nClient)
+
+	vm, err := nClient.GetVMByBiosUUid(ctx, vmIdentifier)
+	if err == nil {
+		return vm, nil
+	}
+
+	// On PC 7.6+, a definitive not-found means the VM does not exist, so the
+	// error is surfaced instead of being masked by the ExtId fallback. Any
+	// other error falls back to the ExtId lookup.
+	if supportsBiosLookup && converged.IsNotFound(err) {
+		return nil, err
+	}
+
+	klog.V(1).Infof("GetVMByBiosUUid did not resolve the VM (%v), falling back to GetVM by ExtId", err)
+	return nClient.GetVM(ctx, vmIdentifier)
+}
+
+// pcSupportsBiosUUIDLookup reports whether the connected Prism Central exposes
+// the BIOS UUID lookup API. If the version cannot be determined, it
+// conservatively reports false so callers use the legacy fallback path.
+func (n *nutanixManager) pcSupportsBiosUUIDLookup(ctx context.Context, nClient interfaces.Prism) bool {
+	version, err := nClient.GetPrismCentralVersion(ctx)
+	if err != nil {
+		klog.V(1).Infof("failed to determine Prism Central version, assuming BIOS UUID lookup is unsupported: %v", err)
+		return false
+	}
+
+	supported := pcVersionSupportsBiosUUIDLookup(version)
+	klog.V(2).Infof("Prism Central version %q: BIOS UUID lookup supported=%t", version, supported) //nolint:typecheck
+
+	return supported
+}
+
+// pcVersionSupportsBiosUUIDLookup reports whether the given Prism Central
+// version string is recent enough (7.6+) to expose the BIOS UUID lookup API.
+// Calendar-versioned releases (e.g. "pc.2024.3") predate the 7.x line and are
+// therefore unsupported.
+//
+// An unrecognized version, such as a development build reporting "master", is
+// treated as the newest version and so as supported, matching how CAPX and
+// CAREN gate on Prism Central versions. An absent version is a failed lookup
+// rather than a new Prism Central, so it still reports unsupported.
+func pcVersionSupportsBiosUUIDLookup(version string) bool {
+	if version == "" {
+		return false
+	}
+	return versionutils.Parse(version).AtLeast(minPCVersionForBiosUUIDLookup)
+}
+
+func (n *nutanixManager) getNutanixInstanceIDForNode(_ context.Context, node *v1.Node) (string, error) {
 	if node == nil {
 		return "", fmt.Errorf("node cannot be nil when getting nutanix instance ID for node")
 	}
@@ -305,11 +561,11 @@ func (n *nutanixManager) getNutanixProviderIDForNode(ctx context.Context, node *
 
 	providerID := node.Spec.ProviderID
 	if providerID == "" {
-		vmUUID, err := n.getNutanixInstanceIDForNode(ctx, node)
+		vmIdentifier, err := n.getNutanixInstanceIDForNode(ctx, node)
 		if err != nil {
 			return "", err
 		}
-		providerID, err = n.generateProviderID(ctx, vmUUID)
+		providerID, err = n.generateProviderID(ctx, vmIdentifier)
 		if err != nil {
 			return "", err
 		}
@@ -317,19 +573,38 @@ func (n *nutanixManager) getNutanixProviderIDForNode(ctx context.Context, node *
 	return providerID, nil
 }
 
-func (n *nutanixManager) generateProviderID(ctx context.Context, vmUUID string) (string, error) {
-	if vmUUID == "" {
-		return "", fmt.Errorf("VM UUID cannot be empty when generating nutanix provider ID for node")
+func (n *nutanixManager) isNodeNutanixManaged(node *v1.Node) (bool, string, error) {
+	if node == nil {
+		return false, "", fmt.Errorf("node cannot be nil when checking provider ownership")
 	}
 
-	return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(vmUUID)), nil
+	providerID := strings.TrimSpace(node.Spec.ProviderID)
+	if providerID == "" {
+		return true, "", nil
+	}
+
+	scheme := getProviderIDScheme(providerID)
+	return strings.EqualFold(scheme, constants.ProviderName), scheme, nil
+}
+
+func getProviderIDScheme(providerID string) string {
+	parts := strings.SplitN(strings.TrimSpace(providerID), "://", 2)
+	return strings.ToLower(strings.TrimSpace(parts[0]))
+}
+
+func (n *nutanixManager) generateProviderID(_ context.Context, vmIdentifier string) (string, error) {
+	if vmIdentifier == "" {
+		return "", fmt.Errorf("VM BIOS UUID cannot be empty when generating nutanix provider ID for node")
+	}
+
+	return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(vmIdentifier)), nil
 }
 
 // generateProviderIDFromVM generates the providerID for a node from the VM object.
 // It first checks if the VM's customAttributes field has "providerID:<UUID>".
 // If yes, it uses this UUID value to set the providerID.
 // If not, it falls back to using the vmUUID (backward compatible).
-func (n *nutanixManager) generateProviderIDFromVM(ctx context.Context, vm *vmmModels.Vm) (string, error) {
+func (n *nutanixManager) generateProviderIDFromVM(_ context.Context, vm *vmmModels.Vm) (string, error) {
 	if vm == nil {
 		return "", fmt.Errorf("VM cannot be nil when generating nutanix provider ID for node")
 	}
@@ -349,13 +624,19 @@ func (n *nutanixManager) generateProviderIDFromVM(ctx context.Context, vm *vmmMo
 		}
 	}
 
-	// Fallback to using vmUUID
-	if vm.ExtId == nil || *vm.ExtId == "" {
-		return "", fmt.Errorf("VM ExtId cannot be empty when generating nutanix provider ID for node")
+	// BIOS UUID is the preferred identifier for the VM
+	if vm.BiosUuid != nil && *vm.BiosUuid != "" {
+		klog.V(2).Infof("Using VM BIOS UUID as providerID: %s", *vm.BiosUuid) //nolint:typecheck
+		return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(*vm.BiosUuid)), nil
 	}
 
-	klog.V(2).Infof("Using VM ExtId as providerID: %s", *vm.ExtId) //nolint:typecheck
-	return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(*vm.ExtId)), nil
+	// Fallback to using vmUUID
+	if vm.ExtId != nil && *vm.ExtId != "" {
+		klog.V(2).Infof("Using VM ExtId as providerID: %s", *vm.ExtId) //nolint:typecheck
+		return fmt.Sprintf("%s://%s", constants.ProviderName, strings.ToLower(*vm.ExtId)), nil
+	}
+
+	return "", fmt.Errorf("VM BIOS UUID and VM ExtId both cannot be empty when generating nutanix provider ID for node")
 }
 
 func (n *nutanixManager) isNodeAddressesSet(node *v1.Node) bool {
@@ -513,73 +794,180 @@ func (n *nutanixManager) stripNutanixIDFromProviderID(providerID string) string 
 	return strings.TrimPrefix(providerID, fmt.Sprintf("%s://", constants.ProviderName))
 }
 
-func (n *nutanixManager) getTopologyInfo(ctx context.Context, nutanixClient interfaces.Prism, vm *vmmModels.Vm) (config.TopologyInfo, error) {
+const (
+	metroFailureDomainPrefix     = "NutanixMetro/"
+	metroSiteFailureDomainPrefix = "NutanixMetroSite/"
+)
+
+// useFailureDomainAsZone reports whether a CAPX-stamped failure-domain custom
+// attribute should replace the discovered Prism or category zone.
+//
+// Metro and MetroSite failure domains are the Kubernetes zone because a VM can
+// occupy either PE in the pair. Traditional PE failure domains must keep the
+// discovered zone so upgrades do not rewrite topology.kubernetes.io/zone out
+// from under volumes created against the Prism Element name.
+func useFailureDomainAsZone(failureDomain string) bool {
+	return strings.HasPrefix(failureDomain, metroFailureDomainPrefix) ||
+		strings.HasPrefix(failureDomain, metroSiteFailureDomainPrefix)
+}
+
+func (n *nutanixManager) getTopologyInfo(ctx context.Context, nutanixClient interfaces.Prism, vm *vmmModels.Vm) (*config.TopologyInfo, error) {
 	topologyDiscovery := n.config.TopologyDiscovery
+	topologyInfo := &config.TopologyInfo{}
 
 	switch topologyDiscovery.Type {
 	case config.PrismTopologyDiscoveryType:
-		return n.getTopologyInfoUsingPrism(ctx, nutanixClient, vm)
+		if err := n.getTopologyInfoUsingPrism(ctx, nutanixClient, vm, topologyInfo); err != nil {
+			return nil, err
+		}
 	case config.CategoriesTopologyDiscoveryType:
-		return n.getTopologyInfoUsingCategories(ctx, nutanixClient, vm)
+		if err := n.getTopologyInfoUsingCategories(ctx, nutanixClient, vm, topologyInfo); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported topology discovery type: %s", topologyDiscovery.Type)
 	}
-	return config.TopologyInfo{}, fmt.Errorf("unsupported topology discovery type: %s", topologyDiscovery.Type)
+
+	// CAPX stamps failure-domain with the full Machine.spec.failureDomain.
+	// Only Metro and MetroSite domains replace the discovered zone: those names
+	// stay stable when a VM fails over between PEs. Traditional PE failure
+	// domains (fd-pe-<id>, fd0, and similar) keep the Prism or category zone.
+	// Rewriting them changes topology.kubernetes.io/zone on upgrade while
+	// existing volumes still require the previous value.
+	if failureDomain := getVMCustomAttributeValue(vm, constants.FailureDomainAttributeKey); useFailureDomainAsZone(failureDomain) {
+		klog.V(1).Infof("using failure-domain %q as zone (discovered zone was %q)", failureDomain, topologyInfo.Zone) //nolint:typecheck
+		topologyInfo.Zone = failureDomain
+	}
+
+	// workaround for bug NCN-110986
+	// The Region and Zone values are used by the upstream to set these label values:
+	// topology.kubernetes.io/region and topology.kubernetes.io/zone
+	// The K8s label value must meet the regex: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,61}[a-zA-Z0-9]$
+	if errs := k8svalidation.IsValidLabelValue(topologyInfo.Region); len(errs) > 0 {
+		sanitizedVal := SanitizeK8sLabelValue(topologyInfo.Region)
+		klog.Warningf("Sanitize the region value to meet the Kubernetes label value requirement. original: %q, sanitized: %q. Otherwise, the K8s node controler will report error: %v", topologyInfo.Region, sanitizedVal, errs)
+		topologyInfo.Region = sanitizedVal
+	}
+	if errs := k8svalidation.IsValidLabelValue(topologyInfo.Zone); len(errs) > 0 {
+		sanitizedVal := SanitizeK8sLabelValue(topologyInfo.Zone)
+		klog.Warningf("Sanitize the zone value to meet the Kubernetes label value requirement. original: %q, sanitized: %q. Otherwise, the K8s node controler will report error: %v", topologyInfo.Zone, sanitizedVal, errs)
+		topologyInfo.Zone = sanitizedVal
+	}
+
+	return topologyInfo, nil
 }
 
-func (n *nutanixManager) getTopologyInfoUsingPrism(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (config.TopologyInfo, error) {
-	ti := config.TopologyInfo{}
+func (n *nutanixManager) getTopologyInfoUsingPrism(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm, topologyInfo *config.TopologyInfo) error {
 	if nClient == nil {
-		return ti, fmt.Errorf("nutanix client cannot be nil when searching for Prism topology info")
+		return fmt.Errorf("nutanix client cannot be nil when searching for Prism topology info")
 	}
 	if vm == nil {
-		return ti, fmt.Errorf("vm cannot be nil when searching for Prism topology info")
+		return fmt.Errorf("vm cannot be nil when searching for Prism topology info")
 	}
 
 	if vm.Cluster == nil || vm.Cluster.ExtId == nil || *vm.Cluster.ExtId == "" {
-		return ti, fmt.Errorf("cannot determine Prism zone information for vm %s", *vm.ExtId)
+		return fmt.Errorf("cannot determine Prism zone information for vm %s", *vm.ExtId)
+	}
+
+	if nClient.IsProjectScoped(ctx) {
+		return n.getProjectScopedTopologyInfoUsingPrism(ctx, nClient, vm, topologyInfo)
 	}
 
 	pc, err := n.getPrismCentralCluster(ctx, nClient)
 	if err != nil {
-		return ti, err
+		return err
 	}
 
 	cluster, err := nClient.GetCluster(ctx, *vm.Cluster.ExtId)
 	if err != nil {
-		return ti, err
+		return err
 	}
 
-	ti.Region = *pc.Name
-	ti.Zone = *cluster.Name
-	return ti, nil
+	topologyInfo.Region = *pc.Name
+	topologyInfo.Zone = *cluster.Name
+	return nil
 }
 
-func (n *nutanixManager) getTopologyInfoUsingCategories(ctx context.Context, nutanixClient interfaces.Prism, vm *vmmModels.Vm) (config.TopologyInfo, error) {
-	tc := &config.TopologyInfo{}
+func (n *nutanixManager) getProjectScopedTopologyInfoUsingPrism(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm, topologyInfo *config.TopologyInfo) error {
+	domainManagers, err := nClient.ListDomainManagers(ctx)
+	if err != nil {
+		return err
+	}
+
+	region, err := getRegionFromDomainManagers(domainManagers)
+	if err != nil {
+		return err
+	}
+
+	zone, err := getZoneFromResourceGroups(ctx, nClient, vm)
+	if err != nil {
+		return err
+	}
+
+	topologyInfo.Region = region
+	topologyInfo.Zone = zone
+	return nil
+}
+
+func getRegionFromDomainManagers(domainManagers []prismModels.DomainManager) (string, error) {
+	for _, domainManager := range domainManagers {
+		if domainManager.Config != nil && domainManager.Config.Name != nil && *domainManager.Config.Name != "" {
+			return *domainManager.Config.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("failed to determine Prism region from domain manager configuration")
+}
+
+func getZoneFromResourceGroups(ctx context.Context, nClient interfaces.Prism, vm *vmmModels.Vm) (string, error) {
+	if vm.Project == nil || vm.Project.ExtId == nil || *vm.Project.ExtId == "" {
+		return "", fmt.Errorf("cannot determine Prism zone information for vm %s: missing project reference", *vm.ExtId)
+	}
+	resourceGroups, err := nClient.GetResourceGroups(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	for _, resourceGroup := range resourceGroups {
+		if resourceGroup.ProjectExtId == nil || *resourceGroup.ProjectExtId != *vm.Project.ExtId {
+			continue
+		}
+		for _, placementTarget := range resourceGroup.PlacementTargets {
+			if placementTarget.ClusterExtId != nil && *placementTarget.ClusterExtId == *vm.Cluster.ExtId {
+				return *placementTarget.ClusterExtId, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("failed to determine Prism zone from resource group placement targets for vm %s", *vm.ExtId)
+}
+
+func (n *nutanixManager) getTopologyInfoUsingCategories(ctx context.Context, nutanixClient interfaces.Prism, vm *vmmModels.Vm, topologyInfo *config.TopologyInfo) error {
 	if vm == nil {
-		return *tc, fmt.Errorf("vm cannot be nil while getting topology info")
+		return fmt.Errorf("vm cannot be nil while getting topology info")
 	}
 	klog.V(1).Infof("searching for topology info on VM entity: %s", *vm.Name) //nolint:typecheck
-	err := n.getTopologyInfoFromVM(ctx, nutanixClient, vm, tc)
+	err := n.getTopologyInfoFromVM(ctx, nutanixClient, vm, topologyInfo)
 	if err != nil {
-		return *tc, err
+		return err
 	}
-	if !n.hasEmptyTopologyInfo(*tc) {
-		klog.V(1).Infof("topology info was found on VM entity: %+v", *tc) //nolint:typecheck
-		return *tc, nil
+	if !n.hasEmptyTopologyInfo(*topologyInfo) {
+		klog.V(1).Infof("topology info was found on VM entity: %+v", *topologyInfo) //nolint:typecheck
+		return nil
 	}
 	klog.V(1).Infof("searching for topology info on host entity for VM: %s", *vm.Name) //nolint:typecheck
 	nClient, err := n.nutanixClient.Get()
 	if err != nil {
-		return *tc, err
+		return err
 	}
 
 	klog.V(1).Infof("searching for topology info on cluster entity for VM: %s", *vm.Name) //nolint:typecheck
-	err = n.getTopologyInfoFromCluster(ctx, nClient, vm, tc)
+	err = n.getTopologyInfoFromCluster(ctx, nClient, vm, topologyInfo)
 	if err != nil {
-		return *tc, err
+		return err
 	}
-	klog.V(1).Infof("topology info after searching cluster: %+v", *tc) //nolint:typecheck
-	return *tc, nil
+	klog.V(1).Infof("topology info after searching cluster: %+v", *topologyInfo) //nolint:typecheck
+	return nil
 }
 
 func (n *nutanixManager) getZoneInfoFromCategories(ctx context.Context, nClient interfaces.Prism, categoryUUIDs []string, ti *config.TopologyInfo) error {

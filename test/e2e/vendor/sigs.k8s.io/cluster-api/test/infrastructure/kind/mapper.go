@@ -36,6 +36,7 @@ package kind
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/blang/semver/v4"
 
@@ -78,7 +79,76 @@ type Mapping struct {
 // a given Kubernetes version is rebuilt with a newer kind version, we are using the latest image.
 var preBuiltMappings = []Mapping{
 
-	// TODO: Add pre-built images for newer Kind versions on top
+	// TODO: Add pre-built images for newer Kind versions.
+
+	// Pre-built images for Kind v0.33.
+	{
+		KubernetesVersion: semver.MustParse("1.37.0"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.36.4"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.35.8"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.34.11"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d",
+	},
+	// Pre-built images for Kind v0.32.
+	{
+		KubernetesVersion: semver.MustParse("1.36.1"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.35.5"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.34.8"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.33.12"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4",
+	},
+	// Pre-built images for Kind v0.31.
+	{
+		KubernetesVersion: semver.MustParse("1.35.0"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.34.3"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.33.7"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.32.11"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8",
+	},
+	{
+		KubernetesVersion: semver.MustParse("1.31.14"),
+		Mode:              Mode0_20,
+		Image:             "kindest/node:v1.31.14@sha256:6f86cf509dbb42767b6e79debc3f2c32e4ee01386f0489b3b2be24b0a55aac2b",
+	},
 	// Pre-built images for Kind v0.30.
 	{
 		KubernetesVersion: semver.MustParse("1.34.0"),
@@ -624,4 +694,28 @@ func pickFirstNotEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// GetKubernetesVersions returns a sorted list with all the Kubernetes version know by the kind mapper.
+// Note: we are returning only Kubernetes version for the latest kind mode.
+func GetKubernetesVersions() []string {
+	versionMap := map[string]semver.Version{}
+	for _, m := range preBuiltMappings {
+		if m.Mode != latestMode {
+			continue
+		}
+		versionMap[m.KubernetesVersion.String()] = m.KubernetesVersion
+	}
+
+	semVersions := make([]semver.Version, 0, len(versionMap))
+	for _, v := range versionMap {
+		semVersions = append(semVersions, v)
+	}
+	sort.Slice(semVersions, func(i, j int) bool { return semVersions[i].LT(semVersions[j]) })
+
+	versions := make([]string, len(semVersions))
+	for i, s := range semVersions {
+		versions[i] = fmt.Sprintf("v%s", s)
+	}
+	return versions
 }

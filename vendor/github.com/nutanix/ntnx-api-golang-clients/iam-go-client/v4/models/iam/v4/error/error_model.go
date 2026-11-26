@@ -1,11 +1,11 @@
 /*
  * Generated file models/iam/v4/error/error_model.go.
  *
- * Product version: 4.0.1
+ * Product version: 4.1.2-beta-3
  *
- * Part of the Nutanix IAM Versioned APIs
+ * Part of the Nutanix Identity and Access Management APIs
  *
- * (c) 2024 Nutanix Inc.  All rights reserved
+ * (c) 2026 Nutanix Inc.  All rights reserved
  *
  */
 
@@ -36,7 +36,7 @@ type AppMessage struct {
 	*/
 	ArgumentsMap map[string]string `json:"argumentsMap,omitempty"`
 	/*
-	  The code associated with this message.This string is typically prefixed by the namespace the endpoint belongs to. For example: VMM-40000
+	  The code associated with this message. This string is typically prefixed with the namespace to which the endpoint belongs. For example: VMM-40000
 	*/
 	Code *string `json:"code,omitempty"`
 	/*
@@ -55,11 +55,101 @@ type AppMessage struct {
 	Severity *import1.MessageSeverity `json:"severity,omitempty"`
 }
 
+func (p *AppMessage) MarshalJSON() ([]byte, error) {
+	// Create Alias to avoid infinite recursion
+	type Alias AppMessage
+
+	// Step 1: Marshal the known fields
+	known, err := json.Marshal(Alias(*p))
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Convert known to map for merging
+	var knownMap map[string]interface{}
+	if err := json.Unmarshal(known, &knownMap); err != nil {
+		return nil, err
+	}
+	delete(knownMap, "$unknownFields")
+
+	// Step 3: Merge unknown fields
+	for k, v := range p.UnknownFields_ {
+		knownMap[k] = v
+	}
+
+	// Step 4: Marshal final merged map
+	return json.Marshal(knownMap)
+}
+
+func (p *AppMessage) UnmarshalJSON(b []byte) error {
+	// Step 1: Unmarshal into a generic map to capture all fields
+	var allFields map[string]interface{}
+	if err := json.Unmarshal(b, &allFields); err != nil {
+		return err
+	}
+
+	// Step 2: Unmarshal into a temporary struct with known fields
+	type Alias AppMessage
+	known := &Alias{}
+	if err := json.Unmarshal(b, known); err != nil {
+		return err
+	}
+
+	// Step 3: Assign known fields
+	*p = *NewAppMessage()
+
+	if known.ObjectType_ != nil {
+		p.ObjectType_ = known.ObjectType_
+	}
+	if known.Reserved_ != nil {
+		p.Reserved_ = known.Reserved_
+	}
+	if known.UnknownFields_ != nil {
+		p.UnknownFields_ = known.UnknownFields_
+	}
+	if known.ArgumentsMap != nil {
+		p.ArgumentsMap = known.ArgumentsMap
+	}
+	if known.Code != nil {
+		p.Code = known.Code
+	}
+	if known.ErrorGroup != nil {
+		p.ErrorGroup = known.ErrorGroup
+	}
+	if known.Locale != nil {
+		p.Locale = known.Locale
+	}
+	if known.Message != nil {
+		p.Message = known.Message
+	}
+	if known.Severity != nil {
+		p.Severity = known.Severity
+	}
+
+	// Step 4: Remove known JSON fields from allFields map
+	delete(allFields, "$objectType")
+	delete(allFields, "$reserved")
+	delete(allFields, "$unknownFields")
+	delete(allFields, "argumentsMap")
+	delete(allFields, "code")
+	delete(allFields, "errorGroup")
+	delete(allFields, "locale")
+	delete(allFields, "message")
+	delete(allFields, "severity")
+
+	// Step 5: Assign remaining fields to UnknownFields_
+	for key, value := range allFields {
+		p.UnknownFields_[key] = value
+	}
+
+	return nil
+}
+
 func NewAppMessage() *AppMessage {
 	p := new(AppMessage)
 	p.ObjectType_ = new(string)
 	*p.ObjectType_ = "iam.v4.error.AppMessage"
-	p.Reserved_ = map[string]interface{}{"$fv": "v4.r0"}
+	p.Reserved_ = map[string]interface{}{"$fv": "v4.r1.b3"}
 	p.UnknownFields_ = map[string]interface{}{}
 
 	p.Locale = new(string)
@@ -85,11 +175,85 @@ type ErrorResponse struct {
 	Error *OneOfErrorResponseError `json:"error,omitempty"`
 }
 
+func (p *ErrorResponse) MarshalJSON() ([]byte, error) {
+	// Create Alias to avoid infinite recursion
+	type Alias ErrorResponse
+
+	// Step 1: Marshal the known fields
+	known, err := json.Marshal(Alias(*p))
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Convert known to map for merging
+	var knownMap map[string]interface{}
+	if err := json.Unmarshal(known, &knownMap); err != nil {
+		return nil, err
+	}
+	delete(knownMap, "$unknownFields")
+
+	// Step 3: Merge unknown fields
+	for k, v := range p.UnknownFields_ {
+		knownMap[k] = v
+	}
+
+	// Step 4: Marshal final merged map
+	return json.Marshal(knownMap)
+}
+
+func (p *ErrorResponse) UnmarshalJSON(b []byte) error {
+	// Step 1: Unmarshal into a generic map to capture all fields
+	var allFields map[string]interface{}
+	if err := json.Unmarshal(b, &allFields); err != nil {
+		return err
+	}
+
+	// Step 2: Unmarshal into a temporary struct with known fields
+	type Alias ErrorResponse
+	known := &Alias{}
+	if err := json.Unmarshal(b, known); err != nil {
+		return err
+	}
+
+	// Step 3: Assign known fields
+	*p = *NewErrorResponse()
+
+	if known.ObjectType_ != nil {
+		p.ObjectType_ = known.ObjectType_
+	}
+	if known.Reserved_ != nil {
+		p.Reserved_ = known.Reserved_
+	}
+	if known.UnknownFields_ != nil {
+		p.UnknownFields_ = known.UnknownFields_
+	}
+	if known.ErrorItemDiscriminator_ != nil {
+		p.ErrorItemDiscriminator_ = known.ErrorItemDiscriminator_
+	}
+	if known.Error != nil {
+		p.Error = known.Error
+	}
+
+	// Step 4: Remove known JSON fields from allFields map
+	delete(allFields, "$objectType")
+	delete(allFields, "$reserved")
+	delete(allFields, "$unknownFields")
+	delete(allFields, "$errorItemDiscriminator")
+	delete(allFields, "error")
+
+	// Step 5: Assign remaining fields to UnknownFields_
+	for key, value := range allFields {
+		p.UnknownFields_[key] = value
+	}
+
+	return nil
+}
+
 func NewErrorResponse() *ErrorResponse {
 	p := new(ErrorResponse)
 	p.ObjectType_ = new(string)
 	*p.ObjectType_ = "iam.v4.error.ErrorResponse"
-	p.Reserved_ = map[string]interface{}{"$fv": "v4.r0"}
+	p.Reserved_ = map[string]interface{}{"$fv": "v4.r1.b3"}
 	p.UnknownFields_ = map[string]interface{}{}
 
 	return p
@@ -147,11 +311,97 @@ type SchemaValidationError struct {
 	ValidationErrorMessages []SchemaValidationErrorMessage `json:"validationErrorMessages,omitempty"`
 }
 
+func (p *SchemaValidationError) MarshalJSON() ([]byte, error) {
+	// Create Alias to avoid infinite recursion
+	type Alias SchemaValidationError
+
+	// Step 1: Marshal the known fields
+	known, err := json.Marshal(Alias(*p))
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Convert known to map for merging
+	var knownMap map[string]interface{}
+	if err := json.Unmarshal(known, &knownMap); err != nil {
+		return nil, err
+	}
+	delete(knownMap, "$unknownFields")
+
+	// Step 3: Merge unknown fields
+	for k, v := range p.UnknownFields_ {
+		knownMap[k] = v
+	}
+
+	// Step 4: Marshal final merged map
+	return json.Marshal(knownMap)
+}
+
+func (p *SchemaValidationError) UnmarshalJSON(b []byte) error {
+	// Step 1: Unmarshal into a generic map to capture all fields
+	var allFields map[string]interface{}
+	if err := json.Unmarshal(b, &allFields); err != nil {
+		return err
+	}
+
+	// Step 2: Unmarshal into a temporary struct with known fields
+	type Alias SchemaValidationError
+	known := &Alias{}
+	if err := json.Unmarshal(b, known); err != nil {
+		return err
+	}
+
+	// Step 3: Assign known fields
+	*p = *NewSchemaValidationError()
+
+	if known.ObjectType_ != nil {
+		p.ObjectType_ = known.ObjectType_
+	}
+	if known.Reserved_ != nil {
+		p.Reserved_ = known.Reserved_
+	}
+	if known.UnknownFields_ != nil {
+		p.UnknownFields_ = known.UnknownFields_
+	}
+	if known.Error != nil {
+		p.Error = known.Error
+	}
+	if known.Path != nil {
+		p.Path = known.Path
+	}
+	if known.StatusCode != nil {
+		p.StatusCode = known.StatusCode
+	}
+	if known.Timestamp != nil {
+		p.Timestamp = known.Timestamp
+	}
+	if known.ValidationErrorMessages != nil {
+		p.ValidationErrorMessages = known.ValidationErrorMessages
+	}
+
+	// Step 4: Remove known JSON fields from allFields map
+	delete(allFields, "$objectType")
+	delete(allFields, "$reserved")
+	delete(allFields, "$unknownFields")
+	delete(allFields, "error")
+	delete(allFields, "path")
+	delete(allFields, "statusCode")
+	delete(allFields, "timestamp")
+	delete(allFields, "validationErrorMessages")
+
+	// Step 5: Assign remaining fields to UnknownFields_
+	for key, value := range allFields {
+		p.UnknownFields_[key] = value
+	}
+
+	return nil
+}
+
 func NewSchemaValidationError() *SchemaValidationError {
 	p := new(SchemaValidationError)
 	p.ObjectType_ = new(string)
 	*p.ObjectType_ = "iam.v4.error.SchemaValidationError"
-	p.Reserved_ = map[string]interface{}{"$fv": "v4.r0"}
+	p.Reserved_ = map[string]interface{}{"$fv": "v4.r1.b3"}
 	p.UnknownFields_ = map[string]interface{}{}
 
 	return p
@@ -180,11 +430,89 @@ type SchemaValidationErrorMessage struct {
 	Message *string `json:"message,omitempty"`
 }
 
+func (p *SchemaValidationErrorMessage) MarshalJSON() ([]byte, error) {
+	// Create Alias to avoid infinite recursion
+	type Alias SchemaValidationErrorMessage
+
+	// Step 1: Marshal the known fields
+	known, err := json.Marshal(Alias(*p))
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Convert known to map for merging
+	var knownMap map[string]interface{}
+	if err := json.Unmarshal(known, &knownMap); err != nil {
+		return nil, err
+	}
+	delete(knownMap, "$unknownFields")
+
+	// Step 3: Merge unknown fields
+	for k, v := range p.UnknownFields_ {
+		knownMap[k] = v
+	}
+
+	// Step 4: Marshal final merged map
+	return json.Marshal(knownMap)
+}
+
+func (p *SchemaValidationErrorMessage) UnmarshalJSON(b []byte) error {
+	// Step 1: Unmarshal into a generic map to capture all fields
+	var allFields map[string]interface{}
+	if err := json.Unmarshal(b, &allFields); err != nil {
+		return err
+	}
+
+	// Step 2: Unmarshal into a temporary struct with known fields
+	type Alias SchemaValidationErrorMessage
+	known := &Alias{}
+	if err := json.Unmarshal(b, known); err != nil {
+		return err
+	}
+
+	// Step 3: Assign known fields
+	*p = *NewSchemaValidationErrorMessage()
+
+	if known.ObjectType_ != nil {
+		p.ObjectType_ = known.ObjectType_
+	}
+	if known.Reserved_ != nil {
+		p.Reserved_ = known.Reserved_
+	}
+	if known.UnknownFields_ != nil {
+		p.UnknownFields_ = known.UnknownFields_
+	}
+	if known.AttributePath != nil {
+		p.AttributePath = known.AttributePath
+	}
+	if known.Location != nil {
+		p.Location = known.Location
+	}
+	if known.Message != nil {
+		p.Message = known.Message
+	}
+
+	// Step 4: Remove known JSON fields from allFields map
+	delete(allFields, "$objectType")
+	delete(allFields, "$reserved")
+	delete(allFields, "$unknownFields")
+	delete(allFields, "attributePath")
+	delete(allFields, "location")
+	delete(allFields, "message")
+
+	// Step 5: Assign remaining fields to UnknownFields_
+	for key, value := range allFields {
+		p.UnknownFields_[key] = value
+	}
+
+	return nil
+}
+
 func NewSchemaValidationErrorMessage() *SchemaValidationErrorMessage {
 	p := new(SchemaValidationErrorMessage)
 	p.ObjectType_ = new(string)
 	*p.ObjectType_ = "iam.v4.error.SchemaValidationErrorMessage"
-	p.Reserved_ = map[string]interface{}{"$fv": "v4.r0"}
+	p.Reserved_ = map[string]interface{}{"$fv": "v4.r1.b3"}
 	p.UnknownFields_ = map[string]interface{}{}
 
 	return p
@@ -195,6 +523,8 @@ type OneOfErrorResponseError struct {
 	ObjectType_   *string                `json:"-"`
 	oneOfType201  []AppMessage           `json:"-"`
 	oneOfType202  *SchemaValidationError `json:"-"`
+	// Holds data with unknown oneOf types
+	UnknownValue_ interface{} `json:"-"`
 }
 
 func NewOneOfErrorResponseError() *OneOfErrorResponseError {
@@ -239,6 +569,9 @@ func (p *OneOfErrorResponseError) SetValue(v interface{}) error {
 }
 
 func (p *OneOfErrorResponseError) GetValue() interface{} {
+	if p.UnknownValue_ != nil {
+		return p.UnknownValue_
+	}
 	if "List<iam.v4.error.AppMessage>" == *p.Discriminator {
 		return p.oneOfType201
 	}
@@ -249,9 +582,76 @@ func (p *OneOfErrorResponseError) GetValue() interface{} {
 }
 
 func (p *OneOfErrorResponseError) UnmarshalJSON(b []byte) error {
+	p.UnknownValue_ = nil
+	// Try to handle nested structure like {"": {"value": {...}}}
+	// This recursively unwraps {"field": {"value": {...}}} patterns for nested oneOf fields
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(b, &rawMap); err == nil {
+		// Check if this field name exists in the map (handles nested structure)
+		if nestedMap, ok := rawMap["List<iam.v4.error.AppMessage>"].(map[string]interface{}); ok {
+			// Check for "value" wrapper
+			if valueData, ok := nestedMap["value"]; ok {
+				valueJSON, marshalErr := json.Marshal(valueData)
+				if marshalErr == nil {
+					vOneOfType201 := new([]AppMessage)
+					var unmarshalErr error
+					// Unmarshal - if vField has oneOf fields, their UnmarshalJSON will handle nested patterns recursively
+					unmarshalErr = json.Unmarshal(valueJSON, vOneOfType201)
+					if unmarshalErr == nil {
+						// For arrays, verify the array item ObjectType matches
+						if vOneOfType201 == nil || len(*vOneOfType201) == 0 || ((*vOneOfType201)[0].ObjectType_ != nil && "iam.v4.error.AppMessage" == *((*vOneOfType201)[0].ObjectType_)) {
+							p.oneOfType201 = *vOneOfType201
+							if nil == p.Discriminator {
+								p.Discriminator = new(string)
+							}
+							*p.Discriminator = "List<iam.v4.error.AppMessage>"
+							if nil == p.ObjectType_ {
+								p.ObjectType_ = new(string)
+							}
+							*p.ObjectType_ = "List<iam.v4.error.AppMessage>"
+							return nil
+						}
+					}
+				}
+			}
+		}
+		// Check if this field name exists in the map (handles nested structure)
+		if nestedMap, ok := rawMap["ObjectType_"].(map[string]interface{}); ok {
+			// Check for "value" wrapper
+			if valueData, ok := nestedMap["value"]; ok {
+				valueJSON, marshalErr := json.Marshal(valueData)
+				if marshalErr == nil {
+					vOneOfType202 := new(SchemaValidationError)
+					var unmarshalErr error
+					// Unmarshal - if vField has oneOf fields, their UnmarshalJSON will handle nested patterns recursively
+					unmarshalErr = json.Unmarshal(valueJSON, vOneOfType202)
+					if unmarshalErr == nil {
+						// For struct items, verify the ObjectType matches
+						if vOneOfType202.ObjectType_ != nil && "iam.v4.error.SchemaValidationError" == *vOneOfType202.ObjectType_ {
+							if nil == p.oneOfType202 {
+								p.oneOfType202 = new(SchemaValidationError)
+							}
+							*p.oneOfType202 = *vOneOfType202
+							if nil == p.Discriminator {
+								p.Discriminator = new(string)
+							}
+							*p.Discriminator = *p.oneOfType202.ObjectType_
+							if nil == p.ObjectType_ {
+								p.ObjectType_ = new(string)
+							}
+							*p.ObjectType_ = *p.oneOfType202.ObjectType_
+							return nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: try direct unmarshalling (for non-nested structures)
 	vOneOfType201 := new([]AppMessage)
 	if err := json.Unmarshal(b, vOneOfType201); err == nil {
-		if len(*vOneOfType201) == 0 || "iam.v4.error.AppMessage" == *((*vOneOfType201)[0].ObjectType_) {
+		if len(*vOneOfType201) == 0 || (vOneOfType201 != nil && (*vOneOfType201)[0].ObjectType_ != nil && "iam.v4.error.AppMessage" == *((*vOneOfType201)[0].ObjectType_)) {
 			p.oneOfType201 = *vOneOfType201
 			if nil == p.Discriminator {
 				p.Discriminator = new(string)
@@ -266,7 +666,7 @@ func (p *OneOfErrorResponseError) UnmarshalJSON(b []byte) error {
 	}
 	vOneOfType202 := new(SchemaValidationError)
 	if err := json.Unmarshal(b, vOneOfType202); err == nil {
-		if "iam.v4.error.SchemaValidationError" == *vOneOfType202.ObjectType_ {
+		if vOneOfType202.ObjectType_ != nil && "iam.v4.error.SchemaValidationError" == *vOneOfType202.ObjectType_ {
 			if nil == p.oneOfType202 {
 				p.oneOfType202 = new(SchemaValidationError)
 			}
@@ -282,10 +682,31 @@ func (p *OneOfErrorResponseError) UnmarshalJSON(b []byte) error {
 			return nil
 		}
 	}
+	// Store raw when no known variant matched
+	var unknownRaw map[string]interface{}
+	if err := json.Unmarshal(b, &unknownRaw); err == nil {
+		p.UnknownValue_ = unknownRaw
+		if nil == p.Discriminator {
+			p.Discriminator = new(string)
+		}
+		if ot, ok := unknownRaw["$objectType"].(string); ok && ot != "" {
+			*p.Discriminator = ot
+		} else {
+			*p.Discriminator = "UNKNOWN"
+		}
+		if nil == p.ObjectType_ {
+			p.ObjectType_ = new(string)
+		}
+		*p.ObjectType_ = *p.Discriminator
+		return nil
+	}
 	return errors.New(fmt.Sprintf("Unable to unmarshal for OneOfErrorResponseError"))
 }
 
 func (p *OneOfErrorResponseError) MarshalJSON() ([]byte, error) {
+	if p.UnknownValue_ != nil {
+		return json.Marshal(p.UnknownValue_)
+	}
 	if "List<iam.v4.error.AppMessage>" == *p.Discriminator {
 		return json.Marshal(p.oneOfType201)
 	}
